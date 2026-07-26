@@ -9,6 +9,13 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { entryId, action } = await request.json();
+  if (!Number.isInteger(entryId) || !["add", "remove"].includes(action)) {
+    return NextResponse.json({ error: "invalid_vote" }, { status: 400 });
+  }
+  const { data: voter } = await admin.from("profiles").select("is_disqualified").eq("id", user.id).maybeSingle();
+  if (!voter || voter.is_disqualified) {
+    return NextResponse.json({ error: "voter_unavailable" }, { status: 403 });
+  }
   const { data: entry } = await admin.from("entries").select("id,event_id,status").eq("id", entryId).single();
   if (!entry || entry.status !== "approved") return NextResponse.json({ error: "entry_unavailable" }, { status: 404 });
   const { data: event } = await admin.from("events").select("*").eq("id", entry.event_id).single();

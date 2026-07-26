@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/browser";
+import ImageCarousel from "@/app/components/ImageCarousel";
 import type { EntryRecord, EventRecord } from "@/lib/types";
-import { eventPhase } from "@/lib/types";
+import { eventPhase, isVotingOpen } from "@/lib/types";
 
 type Sort = "random" | "high" | "low" | "new" | "old";
 
@@ -26,14 +27,26 @@ export default function HomeClient({
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("random");
   const [votes, setVotes] = useState(initialVotes);
+  const [voteCounts, setVoteCounts] = useState<Record<number, number>>(
+    Object.fromEntries(entries.map((entry) => [entry.id, entry.vote_count])),
+  );
   const [confirmId, setConfirmId] = useState<number | null>(null);
-  const [profileOpen, setProfileOpen] = useState(needsProfile);
+  const [voteBusy, setVoteBusy] = useState(false);
+  const [profileOpen] = useState(needsProfile);
   const [newName, setNewName] = useState("");
   const [message, setMessage] = useState("");
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const [randomOrder] = useState(() => {
+    const ids = entries.map((entry) => entry.id);
+    for (let index = ids.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [ids[index], ids[swap]] = [ids[swap], ids[index]];
+    }
+    return ids;
+  });
   const phase = eventPhase(event);
   const showCounts = event?.leaderboard_mode !== "hidden";
-  const votingOpen = phase === "投票中";
+  const votingOpen = isVotingOpen(event, now);
   const deadline = event
     ? phase === "投稿中" ? Date.parse(event.submission_ends_at)
       : phase === "投票中" ? Date.parse(event.voting_ends_at)
@@ -60,8 +73,8 @@ export default function HomeClient({
     if (sort === "low") return [...list].sort((a, b) => a.vote_count - b.vote_count);
     if (sort === "new") return [...list].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
     if (sort === "old") return [...list].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-    return [...list].sort(() => Math.random() - 0.5);
-  }, [entries, query, sort]);
+    return [...list].sort((a, b) => randomOrder.indexOf(a.id) - randomOrder.indexOf(b.id));
+  }, [entries, query, randomOrder, sort]);
 
   const discordLogin = async () => {
     await createClient().auth.signInWithOAuth({
@@ -87,19 +100,33 @@ export default function HomeClient({
     if (confirmId === null) return;
     if (!nickname) return discordLogin();
     const remove = votes.includes(confirmId);
-    const response = await fetch("/api/votes", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ entryId: confirmId, action: remove ? "remove" : "add" }),
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      setMessage(body.error === "vote_limit_reached" ? "五票都已使用。" : "目前無法投票，請稍後再試。");
-    } else {
-      setVotes(remove ? votes.filter((id) => id !== confirmId) : [...votes, confirmId]);
-      setMessage(remove ? "已取消投票，票數已返還。" : "投票完成。");
+    setVoteBusy(true);
+    try {
+      const response = await fetch("/api/votes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entryId: confirmId, action: remove ? "remove" : "add" }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        const errors: Record<string, string> = {
+          vote_limit_reached: "五票都已使用。",
+          voting_closed: "目前尚未開放投票。",
+          duplicate_vote: "你已經投過這件作品。",
+        };
+        setMessage(errors[body.error] ?? "目前無法投票，請稍後再試。");
+      } else {
+        setVotes(remove ? votes.filter((id) => id !== confirmId) : [...votes, confirmId]);
+        setVoteCounts((current) => ({
+          ...current,
+          [confirmId]: Math.max(0, (current[confirmId] ?? 0) + (remove ? -1 : 1)),
+        }));
+        setMessage(remove ? "已取消投票，票數已返還。" : "投票完成。");
+      }
+    } finally {
+      setVoteBusy(false);
+      setConfirmId(null);
     }
-    setConfirmId(null);
   };
 
   return (
@@ -135,21 +162,22 @@ export default function HomeClient({
             <div className="grid">
               {shown.map((entry, index) => (
                 <article className="card" key={entry.id} style={{ animationDelay: `${index * 55}ms` }}>
-                  <Link className="photo" href={`/entry/${entry.id}`}>
-                    <img src={entry.images[0]} alt={`${entry.character_name} Cos 作品`} />
+                  <div className="photo">
+                    <ImageCarousel images={entry.images} alt={`${entry.character_name} Cos 作品`} href={`/entry/${entry.id}`} compact />
                     <span>{String(index + 1).padStart(2, "0")}</span>
                     {entry.uses_ai_background && <i>AI 背景</i>}
-                  </Link>
+                  </div>
                   <div className="card-body">
                     <i className="mini-seal">{entry.nickname[0]}</i>
                     <div><h3>{entry.nickname}</h3><p>{entry.character_name}</p><small>{entry.source_game}</small></div>
                     <button
                       className={votes.includes(entry.id) ? "heart voted" : "heart"}
-                      disabled={!votingOpen}
+                      disabled={!votingOpen || voteBusy}
+                      title={votingOpen ? "投票" : "目前尚未開放投票"}
                       onClick={() => nickname ? setConfirmId(entry.id) : discordLogin()}
                     >{votes.includes(entry.id) ? "♥" : "♡"}</button>
                   </div>
-                  <div className="support">♥ {showCounts ? `${entry.vote_count} 票` : "已獲得支持"}</div>
+                  <div className="support">♥ {showCounts ? `${voteCounts[entry.id] ?? 0} 票` : "已獲得支持"}</div>
                 </article>
               ))}
             </div>
@@ -176,7 +204,7 @@ export default function HomeClient({
             <button className="close" onClick={() => setConfirmId(null)}>×</button>
             <i className="modal-seal">票</i><h2>{votes.includes(confirmId) ? "取消這一票？" : "確定投出一票？"}</h2>
             <p>{votes.includes(confirmId) ? "取消後會立即返還一票。" : "每件作品最多只能投一票。"}</p>
-            <div className="modal-actions"><button onClick={() => setConfirmId(null)}>再想一下</button><button className="primary" onClick={vote}>確認</button></div>
+            <div className="modal-actions"><button disabled={voteBusy} onClick={() => setConfirmId(null)}>再想一下</button><button className="primary" disabled={voteBusy} onClick={vote}>{voteBusy ? "處理中…" : "確認"}</button></div>
           </section>
         </div>
       )}

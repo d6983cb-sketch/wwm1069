@@ -22,4 +22,4 @@
 ## 部署
 
 完整設定步驟請見 `PRODUCTION_SETUP.md`，資料庫結構位於
-`supabase/schema.sql`。
+`supabase/schema.sql`。GitHub `main` 分支更新後由 Vercel 自動部署。

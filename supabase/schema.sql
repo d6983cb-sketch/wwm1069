@@ -21,6 +21,8 @@ create table public.events (
   voting_ends_at timestamptz not null,
   submissions_locked boolean not null default false,
   voting_locked boolean not null default false,
+  voting_override text not null default 'auto'
+    check (voting_override in ('auto', 'open', 'closed')),
   leaderboard_mode text not null default 'hidden'
     check (leaderboard_mode in ('hidden', 'live', 'final')),
   created_at timestamptz not null default now()
@@ -35,7 +37,7 @@ create table public.entries (
   description varchar(500),
   uses_ai_background boolean not null default false,
   original_image_path text,
-  status text not null default 'pending'
+  status text not null default 'approved'
     check (status in ('pending', 'approved', 'rejected', 'disqualified')),
   created_at timestamptz not null default now(),
   unique (event_id, owner_id),

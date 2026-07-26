@@ -5,12 +5,16 @@ import { createClient } from "@/lib/supabase/browser";
 import type { EventRecord } from "@/lib/types";
 
 const MAX_FILES = 5;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 60 * 1024 * 1024;
+const MAX_SOURCE_FILE_BYTES = 30 * 1024 * 1024;
+const MAX_ORIGINAL_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 12 * 1024 * 1024;
+const TARGET_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_EDGE = 2560;
 const UPLOAD_TIMEOUT_MS = 90_000;
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 type Preview = { file: File; url: string };
+type LoadedImage = { source: CanvasImageSource; width: number; height: number; close?: () => void };
 
 function fileExtension(file: File) {
   if (file.type === "image/png") return "png";
@@ -20,6 +24,11 @@ function fileExtension(file: File) {
 
 function storagePath(userId: string, kind: "entry" | "original", file: File, index = 0) {
   return `${userId}/${crypto.randomUUID()}-${kind}-${index + 1}.${fileExtension(file)}`;
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function withTimeout<T>(request: Promise<T>, message: string) {
@@ -34,12 +43,98 @@ async function withTimeout<T>(request: Promise<T>, message: string) {
   }
 }
 
+async function loadImage(file: File): Promise<LoadedImage> {
+  if ("createImageBitmap" in window) {
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    return {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      close: () => bitmap.close(),
+    };
+  }
+
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const next = new Image();
+      next.onload = () => resolve(next);
+      next.onerror = () => reject(new Error("image_decode_failed"));
+      next.src = url;
+    });
+    return { source: image, width: image.naturalWidth, height: image.naturalHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("image_compression_failed"))),
+      type,
+      quality,
+    );
+  });
+}
+
+async function compressImage(file: File) {
+  const loaded = await loadImage(file);
+  try {
+    let scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(loaded.width, loaded.height));
+    let quality = 0.88;
+    let result: Blob | null = null;
+    let outputType = "image/webp";
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const width = Math.max(1, Math.round(loaded.width * scale));
+      const height = Math.max(1, Math.round(loaded.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("canvas_unavailable");
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(loaded.source, 0, 0, width, height);
+
+      try {
+        result = await canvasToBlob(canvas, outputType, quality);
+      } catch {
+        outputType = "image/jpeg";
+        result = await canvasToBlob(canvas, outputType, quality);
+      }
+
+      canvas.width = 1;
+      canvas.height = 1;
+      if (result.size <= TARGET_FILE_BYTES) break;
+
+      if (quality > 0.68) quality -= 0.07;
+      else scale *= 0.86;
+    }
+
+    if (!result) throw new Error("image_compression_failed");
+    const extension = outputType === "image/webp" ? "webp" : "jpg";
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "photo";
+    return new File([result], `${baseName}.${extension}`, {
+      type: outputType,
+      lastModified: file.lastModified,
+    });
+  } finally {
+    loaded.close?.();
+  }
+}
+
 function validateFiles(next: File[]) {
   if (next.length < 1 || next.length > MAX_FILES) return "請選擇 1 至 5 張 Cos 照片。";
   if (next.some((file) => !allowedTypes.has(file.type))) return "照片只支援 JPG、PNG 或 WEBP。";
-  if (next.some((file) => file.size > MAX_FILE_BYTES)) return "每張照片不可超過 20 MB。";
+  if (next.some((file) => file.size > MAX_SOURCE_FILE_BYTES)) return "每張原始照片不可超過 30 MB。";
+  return "";
+}
+
+function validateCompressedFiles(next: File[]) {
   if (next.reduce((total, file) => total + file.size, 0) > MAX_TOTAL_BYTES) {
-    return "全部照片合計不可超過 60 MB。";
+    return "壓縮後的照片合計仍超過 12 MB，請減少照片張數或改用較小的照片。";
   }
   return "";
 }
@@ -59,6 +154,7 @@ function usePreviews(files: File[]) {
 function friendlyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (/timeout|逾時/i.test(message)) return "上傳時間過久，請確認網路後再試一次。";
+  if (/decode|compression|canvas/i.test(message)) return "其中一張照片無法處理，請換成 JPG、PNG 或 WEBP 後再試。";
   if (/row-level security|unauthorized|jwt/i.test(message)) return "登入狀態或圖片權限失效，請重新登入後再試。";
   if (/payload|too large|maximum|exceeded/i.test(message)) return "照片檔案過大，請縮小後再試。";
   if (/bucket.*not found/i.test(message)) return "圖片儲存空間尚未完成設定，請聯絡管理員。";
@@ -70,14 +166,22 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
   const [files, setFiles] = useState<File[]>([]);
   const [original, setOriginal] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
   const [progress, setProgress] = useState("");
   const previews = usePreviews(files);
   const originalFiles = useMemo(() => (original ? [original] : []), [original]);
   const originalPreviews = usePreviews(originalFiles);
 
-  const addFiles = (selected: File[]) => {
-    const unique = selected.filter(
+  const addFiles = async (selected: File[]) => {
+    const availableSlots = MAX_FILES - files.length;
+    if (availableSlots <= 0) return;
+
+    const selectedFiles = selected.slice(0, availableSlots);
+    const validation = validateFiles(selectedFiles);
+    if (validation) return setMessage(validation);
+
+    const unique = selectedFiles.filter(
       (candidate) =>
         !files.some(
           (current) =>
@@ -86,11 +190,32 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
             current.lastModified === candidate.lastModified,
         ),
     );
-    const next = [...files, ...unique].slice(0, MAX_FILES);
-    const validation = validateFiles(next);
-    if (validation) return setMessage(validation);
-    setMessage(files.length + unique.length > MAX_FILES ? "最多 5 張，超出的照片沒有加入。" : "");
-    setFiles(next);
+    if (!unique.length) return setMessage("這些照片已經加入。 ");
+
+    setProcessing(true);
+    setMessage("");
+    try {
+      const compressed: File[] = [];
+      for (let index = 0; index < unique.length; index += 1) {
+        setProgress(`正在壓縮照片 ${index + 1} / ${unique.length}…`);
+        compressed.push(await compressImage(unique[index]));
+      }
+      const next = [...files, ...compressed];
+      const compressedValidation = validateCompressedFiles(next);
+      if (compressedValidation) return setMessage(compressedValidation);
+      setFiles(next);
+      const saved = unique.reduce((total, file, index) => total + Math.max(0, file.size - compressed[index].size), 0);
+      setMessage(
+        selected.length > availableSlots
+          ? `最多 5 張，超出的照片沒有加入。已節省約 ${formatFileSize(saved)}。`
+          : `照片處理完成，已節省約 ${formatFileSize(saved)}。`,
+      );
+    } catch (error) {
+      setMessage(friendlyError(error));
+    } finally {
+      setProgress("");
+      setProcessing(false);
+    }
   };
 
   const moveFile = (from: number, to: number) => {
@@ -118,7 +243,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       setOriginal(null);
       return setMessage("查核原圖只支援 JPG、PNG 或 WEBP。");
     }
-    if (file.size > MAX_FILE_BYTES) {
+    if (file.size > MAX_ORIGINAL_FILE_BYTES) {
       setOriginal(null);
       return setMessage("查核原圖不可超過 20 MB。");
     }
@@ -128,7 +253,8 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
 
   const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
-    const validation = validateFiles(files);
+    if (processing) return setMessage("照片仍在處理中，請稍候。 ");
+    const validation = validateFiles(files) || validateCompressedFiles(files);
     if (validation) return setMessage(validation);
     if (ai && !original) return setMessage("使用 AI 背景時必須上傳查核原圖。");
 
@@ -202,7 +328,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           ? "你已經投稿過，不能重複投稿。"
           : error instanceof Error && error.message === "submissions_closed"
             ? "投稿已截止或目前無法投稿。"
-          : friendlyError(error),
+            : friendlyError(error),
       );
       setProgress("");
     } finally {
@@ -210,23 +336,25 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
     }
   };
 
+  const disabled = busy || processing;
+
   return (
     <form className="submit-form" onSubmit={submit}>
       <section>
         <b>01</b>
         <div>
           <h2>作品照片</h2>
-          <p>1–5 張，可分次加入並選擇封面。</p>
+          <p>1–5 張，可分次加入並選擇封面；加入後會自動壓縮，每張約 2 MB。</p>
           <label className={`upload ${files.length >= MAX_FILES ? "full" : ""}`}>
             <input type="file" multiple accept="image/jpeg,image/png,image/webp"
-              disabled={busy || files.length >= MAX_FILES}
+              disabled={disabled || files.length >= MAX_FILES}
               onChange={(event) => {
-                addFiles(Array.from(event.target.files ?? []));
+                void addFiles(Array.from(event.target.files ?? []));
                 event.target.value = "";
               }} />
             <i>＋</i>
-            <strong>{files.length ? `繼續加入照片（${files.length} / ${MAX_FILES}）` : "加入照片"}</strong>
-            <small>{files.length >= MAX_FILES ? "已達 5 張上限" : "可一次或分次選擇"}</small>
+            <strong>{processing ? "正在處理照片…" : files.length ? `繼續加入照片（${files.length} / ${MAX_FILES}）` : "加入照片"}</strong>
+            <small>{files.length >= MAX_FILES ? "已達 5 張上限" : "JPG、PNG、WEBP；單張原檔最多 30 MB"}</small>
           </label>
           {previews.length > 0 && (
             <div className="upload-previews" aria-label="已選擇的作品照片">
@@ -234,20 +362,20 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
                 <figure key={preview.url} className={index === 0 ? "is-cover" : ""}>
                   <img src={preview.url} alt={`作品照片預覽 ${index + 1}`} />
                   <figcaption>
-                    <strong>{index === 0 ? "封面" : `第 ${index + 1} 張`}</strong>
+                    <strong>{index === 0 ? "封面" : `第 ${index + 1} 張`} · {formatFileSize(preview.file.size)}</strong>
                     <span className="preview-actions">
                       {index > 0 && (
-                        <button type="button" disabled={busy} onClick={() => setCover(index)}>
+                        <button type="button" disabled={disabled} onClick={() => setCover(index)}>
                           設為封面
                         </button>
                       )}
-                      <button type="button" disabled={busy || index === 0}
+                      <button type="button" disabled={disabled || index === 0}
                         aria-label={`將第 ${index + 1} 張照片往前移`}
                         onClick={() => moveFile(index, index - 1)}>←</button>
-                      <button type="button" disabled={busy || index === files.length - 1}
+                      <button type="button" disabled={disabled || index === files.length - 1}
                         aria-label={`將第 ${index + 1} 張照片往後移`}
                         onClick={() => moveFile(index, index + 1)}>→</button>
-                      <button type="button" className="remove" disabled={busy}
+                      <button type="button" className="remove" disabled={disabled}
                         aria-label={`移除第 ${index + 1} 張照片`}
                         onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
                         移除
@@ -264,9 +392,9 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       <section>
         <b>02</b>
         <div className="fields">
-          <label>Cos 角色名稱<input name="character_name" required maxLength={40} disabled={busy} /></label>
-          <label>角色來源遊戲<input name="source_game" required maxLength={40} disabled={busy} /></label>
-          <label>作品介紹（選填）<textarea name="description" rows={5} maxLength={500} disabled={busy} /></label>
+          <label>Cos 角色名稱<input name="character_name" required maxLength={40} disabled={disabled} /></label>
+          <label>角色來源遊戲<input name="source_game" required maxLength={40} disabled={disabled} /></label>
+          <label>作品介紹（選填）<textarea name="description" rows={5} maxLength={500} disabled={disabled} /></label>
         </div>
       </section>
 
@@ -277,7 +405,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
             <input
               type="checkbox"
               checked={ai}
-              disabled={busy}
+              disabled={disabled}
               onChange={(event) => {
                 const checked = event.target.checked;
                 setAi(checked);
@@ -288,14 +416,14 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           </label>
           {ai && (
             <>
-              <label>查核原圖（僅管理員可查看）
-                <input type="file" required accept="image/jpeg,image/png,image/webp" disabled={busy}
+              <label>查核原圖（僅管理員可查看，不會壓縮）
+                <input type="file" required accept="image/jpeg,image/png,image/webp" disabled={disabled}
                   onChange={(event) => chooseOriginal(event.target.files?.[0] ?? null)} />
               </label>
               {originalPreviews[0] && (
                 <div className="original-preview">
                   <img src={originalPreviews[0].url} alt="查核原圖預覽" />
-                  <button type="button" disabled={busy} onClick={() => setOriginal(null)}>移除原圖</button>
+                  <button type="button" disabled={disabled} onClick={() => setOriginal(null)}>移除原圖</button>
                 </div>
               )}
             </>
@@ -309,7 +437,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           {progress && <strong className="upload-progress" aria-live="polite">{progress}</strong>}
           {message && <strong className="form-error" role="alert">{message}</strong>}
         </div>
-        <button className="primary" disabled={busy}>{busy ? "正在送出…" : "確認送出投稿"}</button>
+        <button className="primary" disabled={disabled}>{processing ? "正在處理照片…" : busy ? "正在送出…" : "確認送出投稿"}</button>
       </div>
     </form>
   );

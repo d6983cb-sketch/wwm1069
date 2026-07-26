@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import type { EventRecord } from "@/lib/types";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 
@@ -95,9 +96,18 @@ export default function AdminClient({
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setMessage(response.ok ? "設定已儲存。" : "操作失敗，請稍後重試。");
+      const body = await response.json().catch(() => ({}));
+      const errors: Record<string, string> = {
+        invalid_event_order: "時間順序不正確：投稿開始 ＜ 投稿截止 ≤ 投票開始 ＜ 投票截止。",
+        invalid_event_time: "日期或時間格式不正確。",
+        invalid_announcement: "公告不可只有空白，且最多 1000 字。",
+      };
+      setMessage(response.ok ? "設定已儲存。" : errors[body.error] ?? "操作失敗，請稍後重試。");
       if (response.ok) setTimeout(() => location.reload(), 500);
       return response.ok;
+    } catch {
+      setMessage("網路連線失敗，資料尚未變更，請稍後重試。");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -143,21 +153,31 @@ export default function AdminClient({
     await action({ type: "announcement", eventId: event.id, body: form.get("body") });
   };
 
-  const exportCsv = () => {
-    const header = "投稿ID,角色名稱,來源遊戲,投稿者,投稿時間,狀態\n";
-    const rows = entries
-      .map((entry) =>
-        [entry.id, entry.character_name, entry.source_game, entry.nickname, entry.created_at, statusText[entry.status] ?? entry.status]
-          .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
-          .join(","),
-      )
-      .join("\n");
+  const downloadCsv = (filename: string, header: string[], rows: Array<Array<string | number | boolean>>) => {
+    const escape = (cell: string | number | boolean) => `"${String(cell).replaceAll('"', '""')}"`;
+    const csv = [header, ...rows].map((row) => row.map(escape).join(",")).join("\n");
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob(["\ufeff" + header + rows], { type: "text/csv;charset=utf-8" }));
-    link.download = "cos-entries.csv";
+    link.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
+    link.download = filename;
     link.click();
     URL.revokeObjectURL(link.href);
   };
+
+  const exportEntries = () => downloadCsv(
+    "cos-entries.csv",
+    ["投稿ID", "角色名稱", "來源遊戲", "投稿者", "投稿時間", "狀態"],
+    entries.map((entry) => [entry.id, entry.character_name, entry.source_game, entry.nickname, entry.created_at, statusText[entry.status] ?? entry.status]),
+  );
+  const exportPlayers = () => downloadCsv(
+    "cos-players.csv",
+    ["Discord ID", "活動暱稱", "管理員", "取消資格", "加入時間"],
+    players.map((player) => [player.discord_id, player.nickname, player.is_admin, player.is_disqualified, player.created_at]),
+  );
+  const exportVotes = () => downloadCsv(
+    "cos-votes.csv",
+    ["投票ID", "投稿ID", "投票者", "角色名稱", "投票時間"],
+    votes.map((vote) => [vote.id, vote.entry_id, vote.voter_nickname, vote.character_name, vote.created_at]),
+  );
 
   const filteredPlayers = useMemo(() => {
     const query = playerQuery.trim().toLocaleLowerCase();
@@ -215,7 +235,11 @@ export default function AdminClient({
           <>
             <header className="admin-heading">
               <div><small>ADMIN CONSOLE</small><h1>活動總覽</h1></div>
-              <button onClick={exportCsv}>⇩ 匯出 CSV</button>
+              <div className="csv-actions">
+                <button onClick={exportEntries}>⇩ 投稿 CSV</button>
+                <button onClick={exportPlayers}>⇩ 玩家 CSV</button>
+                <button onClick={exportVotes}>⇩ 投票 CSV</button>
+              </div>
             </header>
             <div className="stats">
               <article><b>{counts.players}</b><span>已登入玩家</span></article>
@@ -244,13 +268,13 @@ export default function AdminClient({
 
         {activeTab === "entries" && (
           <>
-            <header className="admin-heading"><div><small>ENTRIES</small><h1>投稿管理</h1></div><button onClick={exportCsv}>⇩ 匯出 CSV</button></header>
+            <header className="admin-heading"><div><small>ENTRIES</small><h1>投稿管理</h1></div><button onClick={exportEntries}>⇩ 投稿 CSV</button></header>
             <article className="table admin-table">
               {entries.length ? entries.map((entry) => (
                 <div key={entry.id}>
                   <b>#{entry.id}</b>
                   <a className="admin-entry-preview" href={`/entry/${entry.id}`} target="_blank">
-                    {entry.images[0] ? <img src={entry.images[0]} alt={`${entry.character_name} 作品預覽`} /> : <span>無照片</span>}
+                    {entry.images[0] ? <Image src={entry.images[0]} alt={`${entry.character_name} 作品預覽`} width={60} height={60} /> : <span>無照片</span>}
                   </a>
                   <span><b>{entry.character_name}</b><small>{entry.source_game}</small></span>
                   <span>{entry.nickname}</span>
@@ -336,7 +360,7 @@ export default function AdminClient({
           <>
             <header className="admin-heading"><div><small>ANNOUNCEMENTS</small><h1>公告管理</h1></div></header>
             <div className="announcement-layout">
-              <article><h2>發布新公告</h2><form className="announce-form" onSubmit={announce}><textarea name="body" maxLength={300} required rows={7} placeholder="輸入要顯示在首頁的公告" /><button className="primary" disabled={busy}>發布公告</button></form></article>
+              <article><h2>發布新公告</h2><form className="announce-form" onSubmit={announce}><textarea name="body" maxLength={1000} required rows={7} placeholder="輸入要顯示在首頁的公告" /><button className="primary" disabled={busy}>發布公告</button></form></article>
               <article><h2>公告紀錄</h2>{announcements.length ? announcements.map((announcement) => <div className="announcement-item" key={announcement.id}><time>{new Date(announcement.published_at).toLocaleString("zh-TW")}</time><p>{announcement.body}</p></div>) : <p className="muted">目前沒有公告。</p>}</article>
             </div>
           </>

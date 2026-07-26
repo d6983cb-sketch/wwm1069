@@ -109,6 +109,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   const supabase = await createClient();
+  const admin = createAdminClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const body = await request.json();
@@ -118,6 +119,21 @@ export async function DELETE(request: Request) {
   const originalPath = validPath(user.id, body.originalPath, "original")
     ? body.originalPath as string
     : null;
-  await removeUploads(entryPaths, originalPath);
+  const publicUrls = entryPaths.map(
+    (path: string) => admin.storage.from("cos-entries").getPublicUrl(path).data.publicUrl,
+  );
+  const [{ data: usedImages }, { data: usedOriginal }] = await Promise.all([
+    publicUrls.length
+      ? admin.from("entry_images").select("storage_path").in("storage_path", publicUrls)
+      : Promise.resolve({ data: [] }),
+    originalPath
+      ? admin.from("entries").select("original_image_path").eq("original_image_path", originalPath)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const referencedUrls = new Set((usedImages ?? []).map((image) => image.storage_path));
+  const removableEntryPaths = entryPaths.filter(
+    (path: string, index: number) => !referencedUrls.has(publicUrls[index]),
+  );
+  await removeUploads(removableEntryPaths, usedOriginal?.length ? null : originalPath);
   return NextResponse.json({ ok: true });
 }

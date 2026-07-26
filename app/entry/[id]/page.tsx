@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import SiteHeader from "@/app/components/SiteHeader";
 import SiteFooter from "@/app/components/SiteFooter";
+import ImageCarousel from "@/app/components/ImageCarousel";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -25,7 +26,7 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
   const { data: event } = await admin.from("events").select("leaderboard_mode").eq("id", entry.event_id).single();
   return <>
     <SiteHeader nickname={profile?.nickname} />
-    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><img src={images?.[0]?.storage_path} alt={entry.character_name} /><span>作品 #{entry.id}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{owner?.nickname}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>此作品使用 AI 合成背景，原圖已提供管理員查核。</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p><small>登入後可回到首頁投票。</small></article></section></main>
+    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><ImageCarousel images={(images ?? []).map((image) => image.storage_path)} alt={`${entry.character_name} Cos 作品`} /><span>作品 #{entry.id}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{owner?.nickname}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>此作品使用 AI 合成背景，原圖已提供管理員查核。</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p><small>登入後可回到首頁投票。</small></article></section></main>
     <SiteFooter />
   </>;
 }

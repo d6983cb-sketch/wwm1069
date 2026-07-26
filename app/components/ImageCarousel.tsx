@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { TouchEvent, useRef, useState } from "react";
 
 export default function ImageCarousel({
@@ -39,9 +40,17 @@ export default function ImageCarousel({
     >
       <div className="carousel-track" style={{ transform: `translateX(-${active * 100}%)` }}>
         {safeImages.map((image, index) => {
-          const picture = <img src={image} alt={`${alt}（${index + 1} / ${safeImages.length}）`} />;
+          const picture = (
+            <Image
+              src={image}
+              alt={`${alt}（${index + 1} / ${safeImages.length}）`}
+              fill
+              sizes={compact ? "(max-width: 760px) 100vw, 33vw" : "(max-width: 760px) 100vw, 58vw"}
+              priority={index === 0}
+            />
+          );
           return href
-            ? <Link href={href} className="carousel-slide" key={`${image}-${index}`}>{picture}</Link>
+            ? <Link href={href} className="carousel-slide" key={`${image}-${index}`} draggable={false}>{picture}</Link>
             : <div className="carousel-slide" key={`${image}-${index}`}>{picture}</div>;
         })}
       </div>

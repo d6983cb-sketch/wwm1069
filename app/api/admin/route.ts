@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { hasValidTimeline } from "@/lib/types";
 
 const eventDateFields = [
   "submission_starts_at",
@@ -15,6 +16,18 @@ function normalizeZonedDate(value: unknown) {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
+function entryStoragePath(value: string) {
+  if (!value.startsWith("http")) return value;
+  try {
+    const marker = "/storage/v1/object/public/cos-entries/";
+    const pathname = new URL(value).pathname;
+    const index = pathname.indexOf(marker);
+    return index >= 0 ? decodeURIComponent(pathname.slice(index + marker.length)) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const admin = createAdminClient();
@@ -27,8 +40,19 @@ export async function POST(request: Request) {
     const { error } = await admin.from("entries").update({ status: body.status }).eq("id", body.entryId);
     if (error) return NextResponse.json({ error: "update_failed" }, { status: 400 });
   } else if (body.type === "entry_delete") {
+    const [{ data: entry }, { data: images }] = await Promise.all([
+      admin.from("entries").select("original_image_path").eq("id", body.entryId).maybeSingle(),
+      admin.from("entry_images").select("storage_path").eq("entry_id", body.entryId),
+    ]);
     const { error } = await admin.from("entries").delete().eq("id", body.entryId);
     if (error) return NextResponse.json({ error: "delete_failed" }, { status: 400 });
+    const paths = (images ?? [])
+      .map((image) => entryStoragePath(image.storage_path))
+      .filter((path): path is string => Boolean(path));
+    if (paths.length) await admin.storage.from("cos-entries").remove(paths);
+    if (entry?.original_image_path) {
+      await admin.storage.from("cos-originals").remove([entry.original_image_path]);
+    }
   } else if (body.type === "event") {
     const allowed = [
       "title",
@@ -48,6 +72,16 @@ export async function POST(request: Request) {
       if (!normalized) return NextResponse.json({ error: "invalid_event_time" }, { status: 400 });
       changes[field] = normalized;
     }
+    if ("title" in changes) {
+      changes.title = String(changes.title ?? "").trim();
+      if (!changes.title) return NextResponse.json({ error: "invalid_event_title" }, { status: 400 });
+    }
+    if (eventDateFields.some((field) => field in changes)) {
+      const { data: current } = await admin.from("events").select("*").eq("id", body.eventId).maybeSingle();
+      if (!current || !hasValidTimeline({ ...current, ...changes })) {
+        return NextResponse.json({ error: "invalid_event_order" }, { status: 400 });
+      }
+    }
     const { error } = await admin.from("events").update(changes).eq("id", body.eventId);
     if (error) return NextResponse.json({ error: "update_failed" }, { status: 400 });
   } else if (body.type === "event_create") {
@@ -58,8 +92,17 @@ export async function POST(request: Request) {
     if (!submissionStarts || !submissionEnds || !votingStarts || !votingEnds) {
       return NextResponse.json({ error: "invalid_event_time" }, { status: 400 });
     }
+    const title = String(body.title ?? "").trim();
+    if (!title || !hasValidTimeline({
+      submission_starts_at: submissionStarts,
+      submission_ends_at: submissionEnds,
+      voting_starts_at: votingStarts,
+      voting_ends_at: votingEnds,
+    })) {
+      return NextResponse.json({ error: "invalid_event_order" }, { status: 400 });
+    }
     const { error } = await admin.from("events").insert({
-      title: body.title,
+      title,
       submission_starts_at: submissionStarts,
       submission_ends_at: submissionEnds,
       voting_starts_at: votingStarts,
@@ -68,9 +111,13 @@ export async function POST(request: Request) {
     });
     if (error) return NextResponse.json({ error: "create_failed" }, { status: 400 });
   } else if (body.type === "announcement") {
+    const announcement = String(body.body ?? "").trim();
+    if (!announcement || announcement.length > 1000) {
+      return NextResponse.json({ error: "invalid_announcement" }, { status: 400 });
+    }
     const { error } = await admin.from("announcements").insert({
       event_id: body.eventId,
-      body: body.body,
+      body: announcement,
     });
     if (error) return NextResponse.json({ error: "announcement_failed" }, { status: 400 });
   } else if (body.type === "player_disqualify") {
@@ -79,6 +126,13 @@ export async function POST(request: Request) {
     if (error) return NextResponse.json({ error: "player_update_failed" }, { status: 400 });
     if (disqualified) {
       const { error: entryError } = await admin.from("entries").update({ status: "disqualified" }).eq("owner_id", body.playerId);
+      if (entryError) return NextResponse.json({ error: "entry_update_failed" }, { status: 400 });
+    } else {
+      const { error: entryError } = await admin
+        .from("entries")
+        .update({ status: "approved" })
+        .eq("owner_id", body.playerId)
+        .eq("status", "disqualified");
       if (entryError) return NextResponse.json({ error: "entry_update_failed" }, { status: 400 });
     }
   } else {

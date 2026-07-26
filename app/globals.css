@@ -31,6 +31,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .empty-state h3{margin:18px 0 4px;font:26px var(--serif)}
 .empty-state p,.muted{color:var(--dim)}
 .form-error{color:#d67d6c}
+.upload-previews{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:16px}.upload-previews figure{margin:0;border:1px solid var(--line);background:#111713;min-width:0}.upload-previews img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover}.upload-previews figcaption{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 9px;color:var(--dim);font-size:12px}.upload-previews button,.original-preview button{border:0;background:transparent;color:#d6a44f;padding:3px;cursor:pointer}.original-preview{display:flex;align-items:center;gap:14px;margin-top:12px;padding:10px;border:1px solid var(--line);width:max-content;max-width:100%}.original-preview img{width:90px;height:90px;object-fit:cover}.upload-progress,.form-error{display:block;margin-top:8px}.upload-progress{color:var(--gold)}
 .admin-content{padding:40px;min-width:0}
 .admin-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:30px}
 .admin-heading h1{margin:5px 0;font:40px var(--serif)}
@@ -60,3 +61,4 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .announcement-layout>article{padding:22px;border:1px solid var(--line);background:var(--panel)}
 .announcement-item{padding:15px 0;border-top:1px solid var(--line)}.announcement-item time{color:var(--jade);font-size:12px}.announcement-item p{white-space:pre-wrap;line-height:1.7}
 @media(max-width:760px){.top nav a{min-width:0;flex:1;padding:13px 5px}.hero-actions>a{padding:0 12px}.admin{display:block}.admin>aside{display:flex;position:sticky;top:0;z-index:8;padding:10px 14px;overflow-x:auto;flex-direction:row;border-right:0;border-bottom:1px solid var(--line)}.admin>aside>b{display:none}.admin>aside button{flex:0 0 auto;border-left:0;border-bottom:2px solid transparent;white-space:nowrap}.admin>aside button.on{border-bottom-color:var(--jade)}.admin-content{padding:30px 18px}.event-form{grid-template-columns:1fr}.event-form label:first-child,.event-form button{grid-column:auto}.announcement-layout{grid-template-columns:1fr}.admin-heading{align-items:flex-start;gap:14px}.admin-heading h1{font-size:32px}.compact-table>div{min-width:650px}.player-table>div{min-width:680px}}
+@media(max-width:760px){.upload-previews{grid-template-columns:repeat(2,minmax(0,1fr))}}

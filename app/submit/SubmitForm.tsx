@@ -136,14 +136,15 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
     setMessage("");
     const supabase = createClient();
     const form = new FormData(formEvent.currentTarget);
+    const uploadedPaths: string[] = [];
+    let uploadedOriginalPath: string | null = null;
 
     try {
-      let originalPath: string | null = null;
-      if (original) {
+      if (ai && original) {
         setProgress("正在上傳查核原圖…");
-        originalPath = storagePath(userId, "original", original);
+        uploadedOriginalPath = storagePath(userId, "original", original);
         const upload = await withTimeout(
-          supabase.storage.from("cos-originals").upload(originalPath, original, {
+          supabase.storage.from("cos-originals").upload(uploadedOriginalPath, original, {
             contentType: original.type,
             upsert: false,
           }),
@@ -152,7 +153,6 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
         if (upload.error) throw upload.error;
       }
 
-      const uploaded: string[] = [];
       for (let index = 0; index < files.length; index += 1) {
         setProgress(`正在上傳作品照片 ${index + 1} / ${files.length}…`);
         const path = storagePath(userId, "entry", files[index], index);
@@ -164,44 +164,44 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           `第 ${index + 1} 張照片上傳逾時`,
         );
         if (upload.error) throw upload.error;
-        uploaded.push(supabase.storage.from("cos-entries").getPublicUrl(path).data.publicUrl);
+        uploadedPaths.push(path);
       }
 
       setProgress("正在建立投稿資料…");
-      const { data: entry, error } = await supabase
-        .from("entries")
-        .insert({
-          event_id: event.id,
-          owner_id: userId,
-          character_name: String(form.get("character_name")),
-          source_game: String(form.get("source_game")),
-          description: String(form.get("description") || "") || null,
-          uses_ai_background: ai,
-          original_image_path: originalPath,
-          status: "approved",
-        })
-        .select("id")
-        .single();
-
-      if (error || !entry) {
-        if (error?.code === "23505") throw new Error("duplicate_entry");
-        throw error ?? new Error("entry_create_failed");
-      }
-
-      const imageRows = uploaded.map((storage_path, index) => ({
-        entry_id: entry.id,
-        storage_path,
-        position: index + 1,
-      }));
-      const imageInsert = await supabase.from("entry_images").insert(imageRows);
-      if (imageInsert.error) throw imageInsert.error;
+      const response = await fetch("/api/submissions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          eventId: event.id,
+          characterName: form.get("character_name"),
+          sourceGame: form.get("source_game"),
+          description: form.get("description"),
+          usesAiBackground: ai,
+          originalPath: uploadedOriginalPath,
+          imagePaths: uploadedPaths,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "entry_create_failed");
 
       setProgress("投稿完成，正在返回首頁…");
       location.href = "/?submitted=1";
     } catch (error) {
+      if (uploadedPaths.length || uploadedOriginalPath) {
+        await fetch("/api/submissions", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            imagePaths: uploadedPaths,
+            originalPath: uploadedOriginalPath,
+          }),
+        }).catch(() => undefined);
+      }
       setMessage(
         error instanceof Error && error.message === "duplicate_entry"
           ? "你已經投稿過，不能重複投稿。"
+          : error instanceof Error && error.message === "submissions_closed"
+            ? "投稿已截止或目前無法投稿。"
           : friendlyError(error),
       );
       setProgress("");
@@ -274,7 +274,16 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
         <b>03</b>
         <div>
           <label className="check">
-            <input type="checkbox" checked={ai} disabled={busy} onChange={(event) => setAi(event.target.checked)} />
+            <input
+              type="checkbox"
+              checked={ai}
+              disabled={busy}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setAi(checked);
+                if (!checked) setOriginal(null);
+              }}
+            />
             <span><strong>使用 AI 合成背景</strong><small>人物本身禁止使用 AI 生成。</small></span>
           </label>
           {ai && (

@@ -7,7 +7,7 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { nickname } = await request.json();
-  const clean = String(nickname ?? "").trim();
+  const clean = String(nickname ?? "").normalize("NFKC").trim();
   if (!clean || clean.length > 20) return NextResponse.json({ error: "invalid_nickname" }, { status: 400 });
   const discordIdentity = user.identities?.find((identity) => identity.provider === "discord");
   const discordId =
@@ -17,7 +17,14 @@ export async function POST(request: Request) {
     user.user_metadata?.sub ??
     user.id;
   const adminIds = (process.env.ADMIN_DISCORD_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-  const { error } = await createAdminClient().from("profiles").insert({
+  const admin = createAdminClient();
+  const { data: duplicate } = await admin
+    .from("profiles")
+    .select("id")
+    .ilike("nickname", clean)
+    .maybeSingle();
+  if (duplicate) return NextResponse.json({ error: "nickname_taken" }, { status: 409 });
+  const { error } = await admin.from("profiles").insert({
     id: user.id,
     discord_id: String(discordId),
     nickname: clean,

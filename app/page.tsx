@@ -1,4 +1,5 @@
 import HomeClient from "@/app/components/HomeClient";
+import { randomInt } from "node:crypto";
 import SiteFooter from "@/app/components/SiteFooter";
 import SiteHeader from "@/app/components/SiteHeader";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -19,10 +20,13 @@ export default async function HomePage() {
     : { data: [] };
   const entryIds = (rawEntries ?? []).map((entry) => entry.id);
   const ownerIds = [...new Set((rawEntries ?? []).map((entry) => entry.owner_id))];
+  const shouldExposeCounts = event?.leaderboard_mode !== "hidden";
   const [{ data: profiles }, { data: images }, { data: allVotes }, { data: announcement }, { data: ownVotes }] = await Promise.all([
     ownerIds.length ? admin.from("profiles").select("id,nickname").in("id", ownerIds) : Promise.resolve({ data: [] }),
     entryIds.length ? admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", entryIds).order("position") : Promise.resolve({ data: [] }),
-    entryIds.length ? admin.from("votes").select("entry_id").in("entry_id", entryIds) : Promise.resolve({ data: [] }),
+    shouldExposeCounts && entryIds.length
+      ? admin.from("votes").select("entry_id").in("entry_id", entryIds)
+      : Promise.resolve({ data: [] }),
     event ? admin.from("announcements").select("body").eq("event_id", event.id).order("published_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null }),
     user && event ? supabase.from("votes").select("entry_id").eq("event_id", event.id).eq("voter_id", user.id) : Promise.resolve({ data: [] }),
   ]);
@@ -37,6 +41,10 @@ export default async function HomePage() {
     images: (images ?? []).filter((item) => item.entry_id === entry.id).map((item) => item.storage_path),
     vote_count: (allVotes ?? []).filter((vote) => vote.entry_id === entry.id).length,
   })).filter((entry) => entry.images.length > 0);
+  for (let index = entries.length - 1; index > 0; index -= 1) {
+    const swap = randomInt(index + 1);
+    [entries[index], entries[swap]] = [entries[swap], entries[index]];
+  }
   return (
     <>
       <SiteHeader nickname={profile?.nickname} />

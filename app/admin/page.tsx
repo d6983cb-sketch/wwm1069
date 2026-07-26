@@ -23,9 +23,14 @@ export default async function AdminPage() {
     event ? admin.from("announcements").select("id,body,published_at").eq("event_id", event.id).order("published_at", { ascending: false }).limit(20) : Promise.resolve({ data: [] }),
   ]);
   const players = rawPlayers ?? [];
+  const entryIds = (rawEntries ?? []).map((entry) => entry.id);
+  const { data: entryImages } = entryIds.length
+    ? await admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", entryIds).order("position")
+    : { data: [] };
   const entries = (rawEntries ?? []).map((entry) => ({
     ...entry,
     nickname: players.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知",
+    images: (entryImages ?? []).filter((image) => image.entry_id === entry.id).map((image) => image.storage_path),
   }));
   const voteRecords = (rawVotes ?? []).map((vote) => ({
     id: vote.id,

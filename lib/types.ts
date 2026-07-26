@@ -26,12 +26,18 @@ export type EntryRecord = {
 export function eventPhase(event: EventRecord | null) {
   if (!event) return "尚未建立活動";
   const now = Date.now();
-  if (event.voting_override === "open") return "投票中";
   if (now < Date.parse(event.submission_starts_at)) return "尚未開始";
-  if (now <= Date.parse(event.submission_ends_at) && !event.submissions_locked) return "投稿中";
+  if (isSubmissionOpen(event, now)) return "投稿中";
   if (now < Date.parse(event.voting_starts_at)) return "等待投票";
   if (isVotingOpen(event, now)) return "投票中";
   return event.leaderboard_mode === "final" ? "公布結果" : "活動結束";
+}
+
+export function isSubmissionOpen(event: EventRecord | null, now = Date.now()) {
+  if (!event) return false;
+  return !event.submissions_locked
+    && now >= Date.parse(event.submission_starts_at)
+    && now <= Date.parse(event.submission_ends_at);
 }
 
 export function isVotingOpen(event: EventRecord | null, now = Date.now()) {
@@ -41,4 +47,28 @@ export function isVotingOpen(event: EventRecord | null, now = Date.now()) {
   return !event.voting_locked
     && now >= Date.parse(event.voting_starts_at)
     && now <= Date.parse(event.voting_ends_at);
+}
+
+export function canShowAwards(event: EventRecord | null, now = Date.now()) {
+  return Boolean(
+    event
+    && event.leaderboard_mode === "final"
+    && now > Date.parse(event.voting_ends_at),
+  );
+}
+
+export function hasValidTimeline(event: Pick<
+  EventRecord,
+  "submission_starts_at" | "submission_ends_at" | "voting_starts_at" | "voting_ends_at"
+>) {
+  const times = [
+    event.submission_starts_at,
+    event.submission_ends_at,
+    event.voting_starts_at,
+    event.voting_ends_at,
+  ].map(Date.parse);
+  return times.every(Number.isFinite)
+    && times[0] < times[1]
+    && times[1] <= times[2]
+    && times[2] < times[3];
 }

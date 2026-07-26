@@ -73,13 +73,43 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
   const [message, setMessage] = useState("");
   const [progress, setProgress] = useState("");
   const previews = usePreviews(files);
-  const originalPreviews = usePreviews(original ? [original] : []);
+  const originalFiles = useMemo(() => (original ? [original] : []), [original]);
+  const originalPreviews = usePreviews(originalFiles);
 
-  const chooseFiles = (selected: File[]) => {
-    const next = selected.slice(0, MAX_FILES);
+  const addFiles = (selected: File[]) => {
+    const unique = selected.filter(
+      (candidate) =>
+        !files.some(
+          (current) =>
+            current.name === candidate.name &&
+            current.size === candidate.size &&
+            current.lastModified === candidate.lastModified,
+        ),
+    );
+    const next = [...files, ...unique].slice(0, MAX_FILES);
     const validation = validateFiles(next);
-    setMessage(selected.length > MAX_FILES ? "最多只能選擇 5 張，已保留前 5 張。" : validation);
-    setFiles(validation ? [] : next);
+    if (validation) return setMessage(validation);
+    setMessage(files.length + unique.length > MAX_FILES ? "最多 5 張，超出的照片沒有加入。" : "");
+    setFiles(next);
+  };
+
+  const moveFile = (from: number, to: number) => {
+    setFiles((current) => {
+      if (to < 0 || to >= current.length) return current;
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  const setCover = (index: number) => {
+    setFiles((current) => {
+      const next = [...current];
+      const [cover] = next.splice(index, 1);
+      next.unshift(cover);
+      return next;
+    });
   };
 
   const chooseOriginal = (file: File | null) => {
@@ -184,26 +214,44 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       <section>
         <b>01</b>
         <div>
-          <h2>上傳 Cos 照片</h2>
-          <p>最少 1 張、最多 5 張；每張不超過 20 MB。</p>
-          <label className="upload">
-            <input type="file" multiple required accept="image/jpeg,image/png,image/webp" disabled={busy}
-              onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+          <h2>作品照片</h2>
+          <p>1–5 張，可分次加入並選擇封面。</p>
+          <label className={`upload ${files.length >= MAX_FILES ? "full" : ""}`}>
+            <input type="file" multiple accept="image/jpeg,image/png,image/webp"
+              disabled={busy || files.length >= MAX_FILES}
+              onChange={(event) => {
+                addFiles(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }} />
             <i>＋</i>
-            <strong>{files.length ? `已選擇 ${files.length} 張照片` : "選擇照片"}</strong>
-            <small>JPG、PNG 或 WEBP</small>
+            <strong>{files.length ? `繼續加入照片（${files.length} / ${MAX_FILES}）` : "加入照片"}</strong>
+            <small>{files.length >= MAX_FILES ? "已達 5 張上限" : "可一次或分次選擇"}</small>
           </label>
           {previews.length > 0 && (
             <div className="upload-previews" aria-label="已選擇的作品照片">
               {previews.map((preview, index) => (
-                <figure key={preview.url}>
+                <figure key={preview.url} className={index === 0 ? "is-cover" : ""}>
                   <img src={preview.url} alt={`作品照片預覽 ${index + 1}`} />
                   <figcaption>
-                    <span>{index === 0 ? "封面" : `第 ${index + 1} 張`}</span>
-                    <button type="button" disabled={busy} aria-label={`移除第 ${index + 1} 張照片`}
-                      onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
-                      移除
-                    </button>
+                    <strong>{index === 0 ? "封面" : `第 ${index + 1} 張`}</strong>
+                    <span className="preview-actions">
+                      {index > 0 && (
+                        <button type="button" disabled={busy} onClick={() => setCover(index)}>
+                          設為封面
+                        </button>
+                      )}
+                      <button type="button" disabled={busy || index === 0}
+                        aria-label={`將第 ${index + 1} 張照片往前移`}
+                        onClick={() => moveFile(index, index - 1)}>←</button>
+                      <button type="button" disabled={busy || index === files.length - 1}
+                        aria-label={`將第 ${index + 1} 張照片往後移`}
+                        onClick={() => moveFile(index, index + 1)}>→</button>
+                      <button type="button" className="remove" disabled={busy}
+                        aria-label={`移除第 ${index + 1} 張照片`}
+                        onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
+                        移除
+                      </button>
+                    </span>
                   </figcaption>
                 </figure>
               ))}

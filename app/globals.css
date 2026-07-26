@@ -62,3 +62,19 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .announcement-item{padding:15px 0;border-top:1px solid var(--line)}.announcement-item time{color:var(--jade);font-size:12px}.announcement-item p{white-space:pre-wrap;line-height:1.7}
 @media(max-width:760px){.top nav a{min-width:0;flex:1;padding:13px 5px}.hero-actions>a{padding:0 12px}.admin{display:block}.admin>aside{display:flex;position:sticky;top:0;z-index:8;padding:10px 14px;overflow-x:auto;flex-direction:row;border-right:0;border-bottom:1px solid var(--line)}.admin>aside>b{display:none}.admin>aside button{flex:0 0 auto;border-left:0;border-bottom:2px solid transparent;white-space:nowrap}.admin>aside button.on{border-bottom-color:var(--jade)}.admin-content{padding:30px 18px}.event-form{grid-template-columns:1fr}.event-form label:first-child,.event-form button{grid-column:auto}.announcement-layout{grid-template-columns:1fr}.admin-heading{align-items:flex-start;gap:14px}.admin-heading h1{font-size:32px}.compact-table>div{min-width:650px}.player-table>div{min-width:680px}}
 @media(max-width:760px){.upload-previews{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Intuitive multi-step photo picker */
+.upload{min-height:145px;margin-top:16px;transition:.2s}
+.upload:hover{background:#718d7a17;border-color:#dac085}
+.upload.full{opacity:.55;cursor:not-allowed}
+.upload-previews{grid-template-columns:repeat(3,minmax(0,1fr))}
+.upload-previews figure{position:relative}
+.upload-previews figure.is-cover{border-color:var(--gold);box-shadow:0 0 0 1px rgba(181,155,99,.25)}
+.upload-previews figcaption{display:grid;align-items:initial;justify-content:initial;gap:8px;padding:9px}
+.upload-previews figcaption>strong{color:var(--paper)}
+.preview-actions{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.upload-previews button{min-height:31px;border:1px solid var(--line);background:#0b0f0d;padding:4px 8px}
+.upload-previews button:hover{border-color:var(--gold)}
+.upload-previews button.remove{margin-left:auto;color:#d67d6c}
+.upload-previews button:disabled{opacity:.28}
+@media(max-width:760px){.upload-previews{grid-template-columns:repeat(2,minmax(0,1fr))}}

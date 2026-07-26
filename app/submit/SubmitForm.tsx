@@ -178,6 +178,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           description: String(form.get("description") || "") || null,
           uses_ai_background: ai,
           original_image_path: originalPath,
+          status: "approved",
         })
         .select("id")
         .single();

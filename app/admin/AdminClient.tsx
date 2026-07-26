@@ -14,6 +14,7 @@ type PendingEntry = {
   uses_ai_background: boolean;
   original_image_path: string | null;
   status: string;
+  images: string[];
 };
 type AdminPlayer = {
   id: string;
@@ -34,7 +35,7 @@ type AnnouncementRecord = { id: number; body: string; published_at: string };
 
 const tabs: { id: AdminTab; label: string }[] = [
   { id: "overview", label: "總覽" },
-  { id: "entries", label: "投稿審核" },
+  { id: "entries", label: "投稿管理" },
   { id: "votes", label: "投票紀錄" },
   { id: "players", label: "玩家管理" },
   { id: "settings", label: "活動設定" },
@@ -129,7 +130,7 @@ export default function AdminClient({
         voting_starts_at: readTaipeiDate(form, "voting_starts"),
         voting_ends_at: readTaipeiDate(form, "voting_ends"),
         submissions_locked: form.get("submissions_locked") === "on",
-        voting_locked: form.get("voting_locked") === "on",
+        voting_override: form.get("voting_override"),
         leaderboard_mode: form.get("leaderboard_mode"),
       },
     });
@@ -225,7 +226,11 @@ export default function AdminClient({
             <div className="panels">
               <article><h2>活動控制</h2>
                 <label><span><b>鎖定投稿</b><small>鎖定後不接受新投稿</small></span><input type="checkbox" checked={event.submissions_locked} disabled={busy} onChange={(e) => action({ type: "event", eventId: event.id, changes: { submissions_locked: e.target.checked } })} /></label>
-                <label><span><b>鎖定投票</b><small>鎖定後不能投票或取消</small></span><input type="checkbox" checked={event.voting_locked} disabled={busy} onChange={(e) => action({ type: "event", eventId: event.id, changes: { voting_locked: e.target.checked } })} /></label>
+                <label><span><b>投票權限</b><small>可依時間自動切換或立即開放</small></span>
+                  <select value={event.voting_override ?? "auto"} disabled={busy} onChange={(e) => action({ type: "event", eventId: event.id, changes: { voting_override: e.target.value } })}>
+                    <option value="auto">依排程</option><option value="open">立即開放</option><option value="closed">暫停投票</option>
+                  </select>
+                </label>
                 <label><span><b>公開排行榜</b><small>公開票數及前三名</small></span><input type="checkbox" checked={event.leaderboard_mode !== "hidden"} disabled={busy} onChange={(e) => action({ type: "event", eventId: event.id, changes: { leaderboard_mode: e.target.checked ? "final" : "hidden" } })} /></label>
               </article>
               <article><h2>最新公告</h2>
@@ -233,23 +238,26 @@ export default function AdminClient({
                 <button type="button" className="section-link" onClick={() => selectTab("announcements")}>前往公告管理</button>
               </article>
             </div>
-            <article className="table"><h2>投稿概況</h2><p className="muted">{entries.filter((entry) => entry.status === "pending").length ? `目前有 ${entries.filter((entry) => entry.status === "pending").length} 件投稿等待審核。` : "目前沒有待審核投稿。"}</p></article>
+            <article className="table"><h2>投稿概況</h2><p className="muted">新投稿會自動通過並顯示於作品展廳；管理員仍可查看、取消資格或刪除。</p></article>
           </>
         )}
 
         {activeTab === "entries" && (
           <>
-            <header className="admin-heading"><div><small>ENTRIES</small><h1>投稿審核</h1></div><button onClick={exportCsv}>⇩ 匯出 CSV</button></header>
+            <header className="admin-heading"><div><small>ENTRIES</small><h1>投稿管理</h1></div><button onClick={exportCsv}>⇩ 匯出 CSV</button></header>
             <article className="table admin-table">
               {entries.length ? entries.map((entry) => (
                 <div key={entry.id}>
                   <b>#{entry.id}</b>
+                  <a className="admin-entry-preview" href={`/entry/${entry.id}`} target="_blank">
+                    {entry.images[0] ? <img src={entry.images[0]} alt={`${entry.character_name} 作品預覽`} /> : <span>無照片</span>}
+                  </a>
                   <span><b>{entry.character_name}</b><small>{entry.source_game}</small></span>
                   <span>{entry.nickname}</span>
                   <i>{statusText[entry.status] ?? entry.status}</i>
                   <span>{entry.original_image_path ? <a target="_blank" href={`/api/admin/original/${entry.id}`}>查看原圖</a> : "無原圖"}</span>
                   <span className="row-actions">
-                    <button disabled={busy} onClick={() => action({ type: "entry_status", entryId: entry.id, status: "approved" })}>通過</button>
+                    <a href={`/entry/${entry.id}`} target="_blank">查看作品</a>
                     <button className="danger" disabled={busy} onClick={() => action({ type: "entry_status", entryId: entry.id, status: "disqualified" })}>取消資格</button>
                     <button className="danger" disabled={busy} onClick={() => confirm("確定永久刪除這筆投稿？") && action({ type: "entry_delete", entryId: entry.id })}>刪除</button>
                   </span>
@@ -311,8 +319,14 @@ export default function AdminClient({
                   <option value="final">公布最終結果</option>
                 </select>
               </label>
+              <label>投票權限
+                <select name="voting_override" defaultValue={event.voting_override ?? "auto"}>
+                  <option value="auto">依排程自動開放</option>
+                  <option value="open">立即開放投票</option>
+                  <option value="closed">暫停投票</option>
+                </select>
+              </label>
               <label className="setting-check"><input name="submissions_locked" type="checkbox" defaultChecked={event.submissions_locked} /><span><b>鎖定投稿</b><small>停止接受新投稿</small></span></label>
-              <label className="setting-check"><input name="voting_locked" type="checkbox" defaultChecked={event.voting_locked} /><span><b>鎖定投票</b><small>停止投票與取消投票</small></span></label>
               <button className="primary" disabled={busy}>儲存活動設定</button>
             </form>
           </>

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { EventRecord } from "@/lib/types";
+import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 
 type AdminTab = "overview" | "entries" | "votes" | "players" | "settings" | "announcements";
 type PendingEntry = {
@@ -47,10 +48,8 @@ const statusText: Record<string, string> = {
   disqualified: "已取消資格",
 };
 
-function toLocalInput(value: string) {
-  const date = new Date(value);
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+function readTaipeiDate(form: FormData, name: string) {
+  return taipeiInputToIso(String(form.get(name) ?? ""));
 }
 
 export default function AdminClient({
@@ -74,8 +73,11 @@ export default function AdminClient({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const hash = location.hash.replace("#", "") as AdminTab;
-    if (tabs.some((tab) => tab.id === hash)) setActiveTab(hash);
+    const frame = requestAnimationFrame(() => {
+      const hash = location.hash.replace("#", "") as AdminTab;
+      if (tabs.some((tab) => tab.id === hash)) setActiveTab(hash);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   const selectTab = (tab: AdminTab) => {
@@ -106,10 +108,10 @@ export default function AdminClient({
     await action({
       type: "event_create",
       title: form.get("title"),
-      submissionStarts: form.get("submission_starts"),
-      submissionEnds: form.get("submission_ends"),
-      votingStarts: form.get("voting_starts"),
-      votingEnds: form.get("voting_ends"),
+      submissionStarts: readTaipeiDate(form, "submission_starts"),
+      submissionEnds: readTaipeiDate(form, "submission_ends"),
+      votingStarts: readTaipeiDate(form, "voting_starts"),
+      votingEnds: readTaipeiDate(form, "voting_ends"),
     });
   };
 
@@ -122,10 +124,10 @@ export default function AdminClient({
       eventId: event.id,
       changes: {
         title: form.get("title"),
-        submission_starts_at: form.get("submission_starts"),
-        submission_ends_at: form.get("submission_ends"),
-        voting_starts_at: form.get("voting_starts"),
-        voting_ends_at: form.get("voting_ends"),
+        submission_starts_at: readTaipeiDate(form, "submission_starts"),
+        submission_ends_at: readTaipeiDate(form, "submission_ends"),
+        voting_starts_at: readTaipeiDate(form, "voting_starts"),
+        voting_ends_at: readTaipeiDate(form, "voting_ends"),
         submissions_locked: form.get("submissions_locked") === "on",
         voting_locked: form.get("voting_locked") === "on",
         leaderboard_mode: form.get("leaderboard_mode"),
@@ -192,10 +194,10 @@ export default function AdminClient({
       </header>
       <form className="event-form" onSubmit={createEvent}>
         <label>活動名稱<input name="title" required /></label>
-        <label>投稿開始<input name="submission_starts" type="datetime-local" required /></label>
-        <label>投稿截止<input name="submission_ends" type="datetime-local" required /></label>
-        <label>投票開始<input name="voting_starts" type="datetime-local" required /></label>
-        <label>投票截止<input name="voting_ends" type="datetime-local" required /></label>
+        <label>投稿開始（台北時間）<input name="submission_starts" type="datetime-local" required /></label>
+        <label>投稿截止（台北時間）<input name="submission_ends" type="datetime-local" required /></label>
+        <label>投票開始（台北時間）<input name="voting_starts" type="datetime-local" required /></label>
+        <label>投票截止（台北時間）<input name="voting_ends" type="datetime-local" required /></label>
         <button className="primary" disabled={busy}>建立活動</button>
       </form>
       {message && <p className="form-error">{message}</p>}
@@ -298,10 +300,10 @@ export default function AdminClient({
             <header className="admin-heading"><div><small>EVENT SETTINGS</small><h1>活動設定</h1></div></header>
             <form className="event-form settings-form" onSubmit={updateEvent}>
               <label>活動名稱<input name="title" defaultValue={event.title} required /></label>
-              <label>投稿開始<input name="submission_starts" type="datetime-local" defaultValue={toLocalInput(event.submission_starts_at)} required /></label>
-              <label>投稿截止<input name="submission_ends" type="datetime-local" defaultValue={toLocalInput(event.submission_ends_at)} required /></label>
-              <label>投票開始<input name="voting_starts" type="datetime-local" defaultValue={toLocalInput(event.voting_starts_at)} required /></label>
-              <label>投票截止<input name="voting_ends" type="datetime-local" defaultValue={toLocalInput(event.voting_ends_at)} required /></label>
+              <label>投稿開始（台北時間）<input name="submission_starts" type="datetime-local" defaultValue={toTaipeiInput(event.submission_starts_at)} required /></label>
+              <label>投稿截止（台北時間）<input name="submission_ends" type="datetime-local" defaultValue={toTaipeiInput(event.submission_ends_at)} required /></label>
+              <label>投票開始（台北時間）<input name="voting_starts" type="datetime-local" defaultValue={toTaipeiInput(event.voting_starts_at)} required /></label>
+              <label>投票截止（台北時間）<input name="voting_ends" type="datetime-local" defaultValue={toTaipeiInput(event.voting_ends_at)} required /></label>
               <label>排行榜模式
                 <select name="leaderboard_mode" defaultValue={event.leaderboard_mode}>
                   <option value="hidden">活動期間隱藏票數</option>

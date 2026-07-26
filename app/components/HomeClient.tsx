@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/browser";
 import ImageCarousel from "@/app/components/ImageCarousel";
@@ -36,14 +37,7 @@ export default function HomeClient({
   const [newName, setNewName] = useState("");
   const [message, setMessage] = useState("");
   const [now, setNow] = useState(() => Date.now());
-  const [randomOrder] = useState(() => {
-    const ids = entries.map((entry) => entry.id);
-    for (let index = ids.length - 1; index > 0; index -= 1) {
-      const swap = Math.floor(Math.random() * (index + 1));
-      [ids[index], ids[swap]] = [ids[swap], ids[index]];
-    }
-    return ids;
-  });
+  const [randomOrder] = useState(() => entries.map((entry) => entry.id));
   const phase = eventPhase(event);
   const showCounts = event?.leaderboard_mode !== "hidden";
   const votingOpen = isVotingOpen(event, now);
@@ -79,7 +73,10 @@ export default function HomeClient({
   const discordLogin = async () => {
     await createClient().auth.signInWithOAuth({
       provider: "discord",
-      options: { redirectTo: `${location.origin}/auth/callback?next=/` },
+      options: {
+        redirectTo: `${location.origin}/auth/callback?next=/`,
+        scopes: "identify guilds",
+      },
     });
   };
 
@@ -113,6 +110,7 @@ export default function HomeClient({
           vote_limit_reached: "五票都已使用。",
           voting_closed: "目前尚未開放投票。",
           duplicate_vote: "你已經投過這件作品。",
+          voter_unavailable: "此帳號目前無法參與投票。",
         };
         setMessage(errors[body.error] ?? "目前無法投票，請稍後再試。");
       } else {
@@ -143,7 +141,7 @@ export default function HomeClient({
               <div><small>剩餘票數</small><b>{5 - votes.length} / 5</b></div>
             </div>
           </div>
-          <div className="hero-image"><img src="/images/hero.webp" alt="原創武俠 Cos 主視覺" /><span>一身入畫・百相成章</span></div>
+          <div className="hero-image"><Image src="/images/hero.webp" alt="原創武俠 Cos 主視覺" fill priority sizes="(max-width: 760px) 100vw, 39vw" /><span>一身入畫・百相成章</span></div>
         </section>
         <aside className="notice"><b>最新公告</b><span>♢</span><p>{announcement || "目前沒有新公告。"}</p></aside>
         <section className="gallery">
@@ -152,8 +150,10 @@ export default function HomeClient({
             <div className="tools">
               <label>⌕ <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋投稿者、角色或遊戲" /></label>
               <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-                <option value="random">🎲 隨機排列</option><option value="high">♥ 票數高→低</option>
-                <option value="low">♥ 票數低→高</option><option value="new">◷ 最新投稿</option><option value="old">◴ 最早投稿</option>
+                <option value="random">🎲 隨機排列</option>
+                {showCounts && <option value="high">♥ 票數高→低</option>}
+                {showCounts && <option value="low">♥ 票數低→高</option>}
+                <option value="new">◷ 最新投稿</option><option value="old">◴ 最早投稿</option>
               </select>
               <b>♥ 剩餘 {5 - votes.length} / 5</b>
             </div>
@@ -182,7 +182,11 @@ export default function HomeClient({
               ))}
             </div>
           ) : (
-            <div className="empty-state"><i>空</i><h3>目前還沒有公開作品</h3><p>通過管理員審核的投稿會顯示在這裡。</p></div>
+            <div className="empty-state">
+              <i>空</i>
+              <h3>{query.trim() ? "找不到符合條件的作品" : "目前還沒有公開作品"}</h3>
+              <p>{query.trim() ? "請嘗試其他投稿者、角色或遊戲名稱。" : "完成投稿的作品會顯示在這裡。"}</p>
+            </div>
           )}
         </section>
       </main>

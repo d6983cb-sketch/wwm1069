@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       "voting_ends_at",
       "submissions_locked",
       "voting_locked",
+      "voting_override",
       "leaderboard_mode",
     ];
     const changes = Object.fromEntries(Object.entries(body.changes ?? {}).filter(([key]) => allowed.includes(key)));

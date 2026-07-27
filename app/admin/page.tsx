@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import SiteHeader from "@/app/components/SiteHeader";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isConfiguredAdmin } from "@/lib/admin-access";
 import type { EventRecord } from "@/lib/types";
 import AdminClient from "./AdminClient";
 
@@ -12,8 +13,13 @@ export default async function AdminPage() {
   const admin = createAdminClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/");
-  const { data: profile } = await admin.from("profiles").select("nickname,is_admin").eq("id", user.id).single();
-  if (!profile?.is_admin) notFound();
+  const { data: profile } = await admin.from("profiles").select("nickname,is_admin,discord_id").eq("id", user.id).single();
+  if (!profile) notFound();
+  const configuredAdmin = isConfiguredAdmin(profile.discord_id);
+  if (!profile.is_admin && configuredAdmin) {
+    await admin.from("profiles").update({ is_admin: true }).eq("id", user.id);
+  }
+  if (!profile.is_admin && !configuredAdmin) notFound();
   const { data: eventData } = await admin.from("events").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle();
   const event = eventData as EventRecord | null;
   const [{ data: rawEntries }, { data: rawPlayers }, { data: rawVotes }, { data: announcements }] = await Promise.all([
@@ -50,6 +56,7 @@ export default async function AdminPage() {
           votes={voteRecords}
           announcements={announcements ?? []}
           counts={{ players: players.length, entries: entries.length, votes: voteRecords.length }}
+          currentAdminId={user.id}
         />
       </main>
     </>

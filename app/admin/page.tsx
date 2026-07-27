@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { isConfiguredAdmin } from "@/lib/admin-access";
 import type { EventRecord } from "@/lib/types";
 import AdminClient from "./AdminClient";
+import AdminRoleManager from "./AdminRoleManager";
 
 export const dynamic = "force-dynamic";
 
@@ -56,8 +57,8 @@ export default async function AdminPage() {
           votes={voteRecords}
           announcements={announcements ?? []}
           counts={{ players: players.length, entries: entries.length, votes: voteRecords.length }}
-          currentAdminId={user.id}
         />
+        <AdminRoleManager players={players} currentAdminId={user.id} />
       </main>
     </>
   );

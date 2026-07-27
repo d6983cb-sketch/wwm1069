@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { isConfiguredAdmin } from "@/lib/admin-access";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -16,7 +17,6 @@ export async function POST(request: Request) {
     user.user_metadata?.provider_id ??
     user.user_metadata?.sub ??
     user.id;
-  const adminIds = (process.env.ADMIN_DISCORD_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const admin = createAdminClient();
   const { data: duplicate } = await admin
     .from("profiles")
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     id: user.id,
     discord_id: String(discordId),
     nickname: clean,
-    is_admin: adminIds.includes(String(discordId)),
+    is_admin: isConfiguredAdmin(discordId),
   });
   if (error?.code === "23505") return NextResponse.json({ error: "nickname_taken" }, { status: 409 });
   if (error) return NextResponse.json({ error: "profile_failed" }, { status: 400 });

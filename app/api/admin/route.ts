@@ -63,19 +63,28 @@ async function rememberIdempotency(
   const clean = String(key).trim().slice(0, 160);
   if (!clean) return null;
   const admin = createAdminClient();
-  const { data: existing } = await admin
+  const { data: existing, error: lookupError } = await admin
     .from("idempotency_keys")
     .select("response_data")
     .eq("key", clean)
     .eq("actor_profile_id", context.profile.id)
     .maybeSingle();
+  if (lookupError) {
+    console.error("Idempotency lookup failed", lookupError.code, lookupError.message);
+    return response("request_guard_failed", "安全檢查暫時失敗，資料尚未變更。", 500);
+  }
   if (existing) return NextResponse.json(existing.response_data ?? { ok: true, repeated: true });
   const { error } = await admin.from("idempotency_keys").insert({
     key: clean,
     actor_profile_id: context.profile.id,
     action_type: type,
   });
-  return error ? response("duplicate_request", "這個操作已送出，請勿重複提交。", 409) : null;
+  if (!error) return null;
+  if (error.code === "23505") {
+    return response("duplicate_request", "這個操作已送出，請勿重複提交。", 409);
+  }
+  console.error("Idempotency insert failed", error.code, error.message);
+  return response("request_guard_failed", "安全檢查暫時失敗，資料尚未變更。", 500);
 }
 
 async function auditFailure(

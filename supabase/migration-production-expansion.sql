@@ -330,6 +330,27 @@ alter table public.activity_snapshots enable row level security;
 alter table public.idempotency_keys enable row level security;
 alter table public.announcement_receipts enable row level security;
 
+-- Tables created through the SQL editor do not automatically inherit the
+-- service_role grants used by server-only Supabase clients. Keep browser
+-- roles ungranted; RLS remains enabled on every table.
+grant select, insert, update, delete on table
+  public.admin_roles,
+  public.awards,
+  public.award_assignments,
+  public.award_rules,
+  public.award_exclusions,
+  public.audit_logs,
+  public.audit_cleanup_runs,
+  public.activity_snapshots,
+  public.idempotency_keys,
+  public.announcement_receipts
+to service_role;
+
+grant usage, select on sequence
+  public.audit_logs_id_seq,
+  public.audit_cleanup_runs_id_seq
+to service_role;
+
 -- Profile creation is server-only. This closes mass-assignment of is_admin,
 -- is_disqualified and discord_id through the anon/authenticated client.
 drop policy if exists "own profile creation" on public.profiles;

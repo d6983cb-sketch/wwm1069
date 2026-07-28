@@ -24,3 +24,10 @@ test("audit cleanup is scoped by age and cannot target production records", asyn
   assert.match(source, /\.lt\("created_at", cutoff\)/);
   assert.doesNotMatch(source, /\.from\("(?:entries|votes|profiles|entry_images)"\)\.delete\(\)/);
 });
+
+test("new server-only tables explicitly grant service_role access", async () => {
+  const migration = await readFile("supabase/migration-production-expansion.sql", "utf8");
+  assert.match(migration, /public\.awards[\s\S]*public\.idempotency_keys[\s\S]*to service_role;/);
+  assert.match(migration, /public\.audit_logs_id_seq[\s\S]*to service_role;/);
+  assert.doesNotMatch(migration, /to (?:anon|authenticated)\s*;/);
+});

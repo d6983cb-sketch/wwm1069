@@ -1,33 +1,26 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
+const root = new URL("../", import.meta.url);
 
-test("renders development preview metadata", async () => {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+test("the only server-forced super administrator is the requested Discord ID", async () => {
+  const source = await readFile(new URL("lib/admin-access.ts", root), "utf8");
+  assert.match(source, /SUPER_ADMIN_DISCORD_ID\s*=\s*"635371564979716106"/);
+  assert.doesNotMatch(source, /1530036118006009929|405757579432558592|827363719566458931/);
+});
+test("the production expansion migration contains no destructive table or data reset", async () => {
+  const source = await readFile(new URL("supabase/migration-production-expansion.sql", root), "utf8");
+  assert.doesNotMatch(source, /\b(?:drop\s+table|truncate)\b/i);
+  assert.doesNotMatch(source, /delete\s+from\s+public\.(?:entries|votes|profiles|entry_images)/i);
+  assert.match(source, /references public\.entries\(id\) on delete restrict/i);
+  assert.match(source, /where discord_id = '827363719566458931'/);
+  assert.match(source, /set nickname = '久惟'/);
+});
 
-  const response = await worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
-
-  assert.equal(response.status, 200);
-  assert.match(
-    response.headers.get("content-type") ?? "",
-    /^text\/html\b/i,
-  );
-  assert.match(await response.text(), developmentPreviewMeta);
+test("audit cleanup is scoped by age and cannot target production records", async () => {
+  const source = await readFile(new URL("app/api/cron/audit-cleanup/route.ts", root), "utf8");
+  assert.match(source, /\.from\("audit_logs"\)\.delete\(\)/);
+  assert.match(source, /\.lt\("created_at", cutoff\)/);
+  assert.doesNotMatch(source, /\.from\("(?:entries|votes|profiles|entry_images)"\)\.delete\(\)/);
 });

@@ -28,6 +28,7 @@ export default function SiteHeader({ nickname }: { nickname?: string | null }) {
         <Link className={pathname === "/" ? "active" : ""} href="/">作品</Link>
         <Link className={pathname === "/rules" ? "active" : ""} href="/rules">活動規則</Link>
         <Link className={pathname === "/awards" ? "active" : ""} href="/awards">頒獎頁</Link>
+        {nickname && <Link className={pathname === "/notifications" ? "active" : ""} href="/notifications">通知</Link>}
       </nav>
       <button className="discord" onClick={nickname ? logout : login}>
         ◉ {nickname ? `${nickname} · 登出` : "Discord 登入"}

@@ -164,7 +164,7 @@ export default function HomeClient({
                 <article className="card" key={entry.id} style={{ animationDelay: `${index * 55}ms` }}>
                   <div className="photo">
                     <ImageCarousel images={entry.images} alt={`${entry.character_name} Cos 作品`} href={`/entry/${entry.id}`} compact />
-                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <span>{entry.entry_code ?? `#${entry.id}`}</span>
                     {entry.uses_ai_background && <i>AI 背景</i>}
                   </div>
                   <div className="card-body">

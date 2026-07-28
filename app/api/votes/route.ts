@@ -16,11 +16,11 @@ export async function POST(request: Request) {
   if (!voter || voter.is_disqualified) {
     return NextResponse.json({ error: "voter_unavailable" }, { status: 403 });
   }
-  const { data: entry } = await admin.from("entries").select("id,event_id,status").eq("id", entryId).single();
-  if (!entry || entry.status !== "approved") return NextResponse.json({ error: "entry_unavailable" }, { status: 404 });
+  const { data: entry } = await admin.from("entries").select("id,event_id,status,withdrawn_at").eq("id", entryId).single();
+  if (!entry || entry.status !== "approved" || entry.withdrawn_at) return NextResponse.json({ error: "entry_unavailable" }, { status: 404 });
   const { data: event } = await admin.from("events").select("*").eq("id", entry.event_id).single();
   if (!isVotingOpen(event)) {
-    return NextResponse.json({ error: "voting_closed" }, { status: 400 });
+    return NextResponse.json({ error: "voting_closed", message: "目前活動狀態不允許新增或取消投票。" }, { status: 422 });
   }
   const result = action === "remove"
     ? await admin.from("votes").delete().eq("entry_id", entry.id).eq("voter_id", user.id)

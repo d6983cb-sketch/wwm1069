@@ -3,11 +3,14 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import type { EventRecord } from "@/lib/types";
+import type { AdminPermissions } from "@/lib/admin-access";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 
-type AdminTab = "overview" | "entries" | "votes" | "players" | "settings" | "announcements";
+type AdminTab = "overview" | "entries" | "votes" | "players" | "settings" | "announcements" | "awards" | "backups" | "audit";
 type PendingEntry = {
   id: number;
+  entry_code: string | null;
+  event_id: string;
   character_name: string;
   source_game: string;
   created_at: string;
@@ -15,6 +18,7 @@ type PendingEntry = {
   uses_ai_background: boolean;
   original_image_path: string | null;
   status: string;
+  withdrawn_at: string | null;
   images: string[];
 };
 type AdminPlayer = {
@@ -23,6 +27,8 @@ type AdminPlayer = {
   nickname: string;
   is_admin: boolean;
   is_disqualified: boolean;
+  admin_note?: string | null;
+  admin_role?: { permissions: AdminPermissions; is_active: boolean } | null;
   created_at: string;
 };
 type VoteRecord = {
@@ -32,7 +38,27 @@ type VoteRecord = {
   voter_nickname: string;
   character_name: string;
 };
-type AnnouncementRecord = { id: number; body: string; published_at: string };
+type AnnouncementRecord = {
+  id: number;
+  title: string | null;
+  body: string;
+  published_at: string;
+  is_active: boolean;
+};
+type AwardRecord = { id: string; name: string; description: string | null; sort_order: number; is_active: boolean; is_archived: boolean };
+type AssignmentRecord = { id: string; award_id: string; submission_id: number };
+type SnapshotRecord = { id: string; created_at: string; created_by: string | null };
+type AuditRecord = {
+  id: number;
+  actor_discord_id: string | null;
+  actor_nickname: string | null;
+  action_type: string;
+  target_type: string | null;
+  target_id: string | null;
+  result: string;
+  failure_reason: string | null;
+  created_at: string;
+};
 
 const tabs: { id: AdminTab; label: string }[] = [
   { id: "overview", label: "總覽" },
@@ -41,6 +67,9 @@ const tabs: { id: AdminTab; label: string }[] = [
   { id: "players", label: "玩家管理" },
   { id: "settings", label: "活動設定" },
   { id: "announcements", label: "公告管理" },
+  { id: "awards", label: "獎項管理" },
+  { id: "backups", label: "備份與匯出" },
+  { id: "audit", label: "操作紀錄" },
 ];
 
 const statusText: Record<string, string> = {
@@ -61,6 +90,13 @@ export default function AdminClient({
   votes,
   announcements,
   counts,
+  permissions,
+  isSuperAdmin,
+  awards,
+  assignments,
+  awardRules,
+  snapshots,
+  auditLogs,
 }: {
   event: EventRecord | null;
   entries: PendingEntry[];
@@ -68,19 +104,41 @@ export default function AdminClient({
   votes: VoteRecord[];
   announcements: AnnouncementRecord[];
   counts: { players: number; entries: number; votes: number };
+  permissions: AdminPermissions;
+  isSuperAdmin: boolean;
+  awards: AwardRecord[];
+  assignments: AssignmentRecord[];
+  awardRules: Record<string, unknown> | null;
+  snapshots: SnapshotRecord[];
+  auditLogs: AuditRecord[];
 }) {
   const [activeTab, setActiveTab] = useState<AdminTab>(event ? "overview" : "settings");
   const [message, setMessage] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editingPlayer, setEditingPlayer] = useState<AdminPlayer | null>(null);
+  const [selectedAwardEntry, setSelectedAwardEntry] = useState<Record<string, string>>({});
+  const can = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
+  const visibleTabs = useMemo(() => tabs.filter((tab) => {
+    const allowed = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
+    if (tab.id === "entries") return allowed("submission_viewer") || allowed("submission_manager");
+    if (tab.id === "votes") return allowed("statistics_viewer") || allowed("report_viewer");
+    if (tab.id === "players") return allowed("player_manager") || allowed("eligibility_manager") || isSuperAdmin;
+    if (tab.id === "settings") return allowed("event_manager");
+    if (tab.id === "announcements") return allowed("announcement_manager");
+    if (tab.id === "awards") return allowed("award_manager") || allowed("award_assigner");
+    if (tab.id === "backups") return allowed("report_viewer");
+    if (tab.id === "audit") return allowed("audit_viewer");
+    return true;
+  }), [isSuperAdmin, permissions]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       const hash = location.hash.replace("#", "") as AdminTab;
-      if (tabs.some((tab) => tab.id === hash)) setActiveTab(hash);
+      if (visibleTabs.some((tab) => tab.id === hash)) setActiveTab(hash);
     });
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [visibleTabs]);
 
   const selectTab = (tab: AdminTab) => {
     setActiveTab(tab);
@@ -94,7 +152,7 @@ export default function AdminClient({
       const response = await fetch("/api/admin", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, idempotencyKey: crypto.randomUUID() }),
       });
       const body = await response.json().catch(() => ({}));
       const errors: Record<string, string> = {
@@ -102,7 +160,7 @@ export default function AdminClient({
         invalid_event_time: "日期或時間格式不正確。",
         invalid_announcement: "公告不可只有空白，且最多 1000 字。",
       };
-      setMessage(response.ok ? "設定已儲存。" : errors[body.error] ?? "操作失敗，請稍後重試。");
+      setMessage(response.ok ? body.message ?? "設定已儲存。" : body.message ?? errors[body.error] ?? "操作失敗，請稍後重試。");
       if (response.ok) setTimeout(() => location.reload(), 500);
       return response.ok;
     } catch {
@@ -130,6 +188,15 @@ export default function AdminClient({
     formEvent.preventDefault();
     if (!event) return;
     const form = new FormData(formEvent.currentTarget);
+    const nextStatus = String(form.get("status") ?? "");
+    const privacyChanged =
+      form.get("submission_identity_mode") !== (event.submission_identity_mode ?? "named")
+      || form.get("voting_identity_mode") !== (event.voting_identity_mode ?? "named")
+      || (form.get("reveal_authors_after_results") === "on") !== (event.reveal_authors_after_results !== false);
+    if (["voting_closed", "archived"].includes(nextStatus) || privacyChanged) {
+      if (!confirm(`即將儲存活動狀態「${nextStatus}」及顯示設定。這會立即影響玩家可執行的操作與作者顯示。`)) return;
+      if (prompt("請輸入「確認切換」以繼續") !== "確認切換") return;
+    }
     await action({
       type: "event",
       eventId: event.id,
@@ -142,6 +209,10 @@ export default function AdminClient({
         submissions_locked: form.get("submissions_locked") === "on",
         voting_override: form.get("voting_override"),
         leaderboard_mode: form.get("leaderboard_mode"),
+        status: form.get("status"),
+        submission_identity_mode: form.get("submission_identity_mode"),
+        voting_identity_mode: form.get("voting_identity_mode"),
+        reveal_authors_after_results: form.get("reveal_authors_after_results") === "on",
       },
     });
   };
@@ -150,7 +221,30 @@ export default function AdminClient({
     formEvent.preventDefault();
     if (!event) return;
     const form = new FormData(formEvent.currentTarget);
-    await action({ type: "announcement", eventId: event.id, body: form.get("body") });
+    await action({
+      type: "announcement",
+      eventId: event.id,
+      title: form.get("title"),
+      body: form.get("body"),
+      announcementType: form.get("announcement_type"),
+      audience: form.get("audience"),
+      targetProfileId: form.get("target_profile_id"),
+      isPinned: form.get("is_pinned") === "on",
+      requiresAck: form.get("requires_ack") === "on",
+    });
+  };
+
+  const savePlayer = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    if (!editingPlayer) return;
+    const form = new FormData(formEvent.currentTarget);
+    const ok = await action({
+      type: "player_update",
+      playerId: editingPlayer.id,
+      nickname: form.get("nickname"),
+      note: form.get("note"),
+    });
+    if (ok) setEditingPlayer(null);
   };
 
   const downloadCsv = (filename: string, header: string[], rows: Array<Array<string | number | boolean>>) => {
@@ -192,7 +286,7 @@ export default function AdminClient({
   const sidebar = (
     <aside aria-label="管理功能">
       <b>百相後台 <i>管</i></b>
-      {tabs.map((tab) => (
+      {visibleTabs.map((tab) => (
         <button
           type="button"
           className={activeTab === tab.id ? "on" : ""}
@@ -262,7 +356,7 @@ export default function AdminClient({
                 <button type="button" className="section-link" onClick={() => selectTab("announcements")}>前往公告管理</button>
               </article>
             </div>
-            <article className="table"><h2>投稿概況</h2><p className="muted">新投稿會自動通過並顯示於作品展廳；管理員仍可查看、取消資格或刪除。</p></article>
+            <article className="table"><h2>投稿概況</h2><p className="muted">新投稿會自動通過並顯示於作品展廳；管理員仍可查看、取消資格或復原撤回，正式資料不會被硬刪除。</p></article>
           </>
         )}
 
@@ -272,18 +366,23 @@ export default function AdminClient({
             <article className="table admin-table">
               {entries.length ? entries.map((entry) => (
                 <div key={entry.id}>
-                  <b>#{entry.id}</b>
+                  <b>{entry.entry_code ?? `#${entry.id}`}</b>
                   <a className="admin-entry-preview" href={`/entry/${entry.id}`} target="_blank">
                     {entry.images[0] ? <Image src={entry.images[0]} alt={`${entry.character_name} 作品預覽`} width={60} height={60} /> : <span>無照片</span>}
                   </a>
                   <span><b>{entry.character_name}</b><small>{entry.source_game}</small></span>
                   <span>{entry.nickname}</span>
-                  <i>{statusText[entry.status] ?? entry.status}</i>
+                  <i>{entry.withdrawn_at ? "已撤回" : statusText[entry.status] ?? entry.status}</i>
                   <span>{entry.original_image_path ? <a target="_blank" href={`/api/admin/original/${entry.id}`}>查看原圖</a> : "無原圖"}</span>
                   <span className="row-actions">
                     <a href={`/entry/${entry.id}`} target="_blank">查看作品</a>
-                    <button className="danger" disabled={busy} onClick={() => action({ type: "entry_status", entryId: entry.id, status: "disqualified" })}>取消資格</button>
-                    <button className="danger" disabled={busy} onClick={() => confirm("確定永久刪除這筆投稿？") && action({ type: "entry_delete", entryId: entry.id })}>刪除</button>
+                    {can("submission_manager") && <button className="danger" disabled={busy} onClick={() => confirm(`確定取消作品 ${entry.entry_code ?? `#${entry.id}`} 的參賽資格？投稿、圖片與投票都會保留。`) && action({ type: "entry_status", entryId: entry.id, status: "disqualified" })}>取消資格</button>}
+                    {can("submission_manager") && entry.status !== "approved" && <button disabled={busy} onClick={() => confirm(`確定恢復作品 ${entry.entry_code ?? `#${entry.id}`} 的公開狀態？`) && action({ type: "entry_status", entryId: entry.id, status: "approved" })}>恢復展示</button>}
+                    {can("submission_manager") && entry.withdrawn_at && <button disabled={busy} onClick={() => (
+                      confirm(`確定復原作品 ${entry.entry_code ?? `#${entry.id}`}？只有投稿開放期間可執行。`)
+                      && prompt("請輸入「確認復原」以繼續") === "確認復原"
+                      && action({ type: "entry_restore", entryId: entry.id })
+                    )}>復原撤回</button>}
                   </span>
                 </div>
               )) : <p className="muted">目前沒有投稿。</p>}
@@ -314,13 +413,16 @@ export default function AdminClient({
                   <span><b>{player.nickname}</b>{player.is_admin && <small>管理員</small>}</span>
                   <code>{player.discord_id}</code>
                   <i>{player.is_disqualified ? "已取消資格" : "正常"}</i>
-                  <button
-                    className={player.is_disqualified ? "" : "danger"}
-                    disabled={busy || player.is_admin}
-                    onClick={() => action({ type: "player_disqualify", playerId: player.id, disqualified: !player.is_disqualified })}
-                  >
-                    {player.is_disqualified ? "恢復資格" : "取消資格"}
-                  </button>
+                  <span className="row-actions">
+                    {can("player_manager") && <button disabled={busy} onClick={() => setEditingPlayer(player)}>編輯玩家</button>}
+                    {can("eligibility_manager") && <button
+                      className={player.is_disqualified ? "" : "danger"}
+                      disabled={busy || player.discord_id === "635371564979716106"}
+                      onClick={() => confirm(`${player.is_disqualified ? "恢復" : "取消"}「${player.nickname}」（${player.discord_id}）的參賽資格？`) && action({ type: "player_disqualify", playerId: player.id, disqualified: !player.is_disqualified })}
+                    >
+                      {player.is_disqualified ? "恢復資格" : "取消資格"}
+                    </button>}
+                  </span>
                 </div>
               )) : <p className="muted">找不到符合的玩家。</p>}
             </article>
@@ -343,6 +445,28 @@ export default function AdminClient({
                   <option value="final">公布最終結果</option>
                 </select>
               </label>
+              <label>活動狀態
+                <select name="status" defaultValue={event.status ?? "draft"}>
+                  <option value="draft">草稿</option>
+                  <option value="submission_open">投稿開放</option>
+                  <option value="submission_closed">投稿截止</option>
+                  <option value="voting_open">投票開放</option>
+                  <option value="voting_closed">投票截止</option>
+                  <option value="results_published">結果公布</option>
+                  <option value="archived">活動封存</option>
+                </select>
+              </label>
+              <label>投稿期間作者顯示
+                <select name="submission_identity_mode" defaultValue={event.submission_identity_mode ?? "named"}>
+                  <option value="named">實名</option><option value="anonymous">匿名</option>
+                </select>
+              </label>
+              <label>投票期間作者顯示
+                <select name="voting_identity_mode" defaultValue={event.voting_identity_mode ?? "named"}>
+                  <option value="named">實名</option><option value="anonymous">匿名</option>
+                </select>
+              </label>
+              <label className="setting-check"><input name="reveal_authors_after_results" type="checkbox" defaultChecked={event.reveal_authors_after_results !== false} /><span><b>結果公布後顯示作者</b><small>關閉時頒獎頁仍維持匿名</small></span></label>
               <label>投票權限
                 <select name="voting_override" defaultValue={event.voting_override ?? "auto"}>
                   <option value="auto">依排程自動開放</option>
@@ -360,14 +484,143 @@ export default function AdminClient({
           <>
             <header className="admin-heading"><div><small>ANNOUNCEMENTS</small><h1>公告管理</h1></div></header>
             <div className="announcement-layout">
-              <article><h2>發布新公告</h2><form className="announce-form" onSubmit={announce}><textarea name="body" maxLength={1000} required rows={7} placeholder="輸入要顯示在首頁的公告" /><button className="primary" disabled={busy}>發布公告</button></form></article>
-              <article><h2>公告紀錄</h2>{announcements.length ? announcements.map((announcement) => <div className="announcement-item" key={announcement.id}><time>{new Date(announcement.published_at).toLocaleString("zh-TW")}</time><p>{announcement.body}</p></div>) : <p className="muted">目前沒有公告。</p>}</article>
+              <article><h2>發布新公告</h2><form className="announce-form" onSubmit={announce}>
+                <input name="title" maxLength={120} placeholder="公告標題（選填）" />
+                <select name="announcement_type" defaultValue="general"><option value="general">一般公告</option><option value="submission">投稿提醒</option><option value="voting">投票提醒</option><option value="rules">規則更新</option><option value="awards">得獎公告</option><option value="maintenance">系統維護</option></select>
+                <select name="audience" defaultValue="all"><option value="all">所有人</option><option value="participants">參賽者</option><option value="submitters">已投稿者</option><option value="admins">管理員</option><option value="player">指定玩家</option></select>
+                <select name="target_profile_id" defaultValue=""><option value="">未指定玩家</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nickname} · {player.discord_id}</option>)}</select>
+                <textarea name="body" maxLength={5000} required rows={7} placeholder="輸入公告內容" />
+                <label><input type="checkbox" name="is_pinned" /> 置頂</label>
+                <label><input type="checkbox" name="requires_ack" /> 要求玩家確認</label>
+                <button className="primary" disabled={busy}>發布公告</button>
+              </form></article>
+              <article><h2>公告紀錄</h2>{announcements.length ? announcements.map((announcement) => <div className="announcement-item" key={announcement.id}>
+                <time>{new Date(announcement.published_at).toLocaleString("zh-TW")} · {announcement.is_active ? "啟用" : "已撤下"}</time>
+                {announcement.title && <b>{announcement.title}</b>}
+                <p>{announcement.body}</p>
+                {announcement.is_active && <button
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => confirm(`確定撤下公告「${announcement.title || `#${announcement.id}`}」？紀錄會保留。`) && action({ type: "announcement_archive", announcementId: announcement.id })}
+                >撤下公告</button>}
+              </div>) : <p className="muted">目前沒有公告。</p>}</article>
             </div>
+          </>
+        )}
+
+        {activeTab === "awards" && (
+          <>
+            <header className="admin-heading"><div><small>AWARDS</small><h1>獎項管理</h1></div></header>
+            {can("award_manager") && <form className="award-create" onSubmit={(formEvent) => {
+              formEvent.preventDefault();
+              const form = new FormData(formEvent.currentTarget);
+              void action({ type: "award_create", eventId: event.id, name: form.get("name"), description: form.get("description"), sortOrder: awards.length });
+            }}>
+              <input name="name" maxLength={80} required placeholder="新增獎項名稱" />
+              <input name="description" maxLength={1000} placeholder="獎項說明" />
+              <button className="primary" disabled={busy}>新增獎項</button>
+            </form>}
+            <section className="award-admin-list">
+              {awards.length ? awards.map((award) => {
+                const assigned = assignments.find((item) => item.award_id === award.id);
+                return <article key={award.id} className={award.is_archived ? "archived" : ""}>
+                  <header><div><h2>{award.name}</h2><p>{award.description || "無說明"}</p></div><span>{award.is_archived ? "已封存" : award.is_active ? "啟用" : "停用"}</span></header>
+                  <p>目前指派：{assigned ? entries.find((entry) => entry.id === assigned.submission_id)?.entry_code ?? `#${assigned.submission_id}` : "尚未公布"}</p>
+                  {can("award_manager") && !award.is_archived && <button disabled={busy} onClick={() => {
+                    const name = prompt("獎項名稱", award.name)?.trim();
+                    if (!name) return;
+                    const description = prompt("獎項說明", award.description ?? "") ?? award.description ?? "";
+                    void action({
+                      type: "award_update",
+                      eventId: event.id,
+                      awardId: award.id,
+                      name,
+                      description,
+                      sortOrder: award.sort_order,
+                      isActive: award.is_active,
+                    });
+                  }}>編輯獎項</button>}
+                  {can("award_assigner") && !award.is_archived && <div className="award-assign">
+                    <select value={selectedAwardEntry[award.id] ?? String(assigned?.submission_id ?? "")} onChange={(e) => setSelectedAwardEntry((current) => ({ ...current, [award.id]: e.target.value }))}>
+                      <option value="">選擇得獎作品</option>
+                      {entries.filter((entry) => !entry.withdrawn_at && entry.status === "approved").map((entry) => <option key={entry.id} value={entry.id}>{entry.entry_code ?? `#${entry.id}`} · {entry.character_name} · {entry.nickname}</option>)}
+                    </select>
+                    <button disabled={busy || !selectedAwardEntry[award.id] && !assigned} onClick={() => action({ type: "award_assignment_set", eventId: event.id, awardId: award.id, submissionId: Number(selectedAwardEntry[award.id] ?? assigned?.submission_id) })}>指派</button>
+                    {assigned && <button className="danger" disabled={busy} onClick={() => confirm(`確定解除「${award.name}」的得獎作品？`) && action({ type: "award_assignment_remove", awardId: award.id })}>解除</button>}
+                  </div>}
+                  {can("award_manager") && !award.is_archived && <button disabled={busy} onClick={() => confirm(`確定停用或封存獎項「${award.name}」？`) && action({ type: "award_archive", awardId: award.id, archive: Boolean(assigned) })}>{assigned ? "封存獎項" : "停用獎項"}</button>}
+                </article>;
+              }) : <p className="muted">目前尚未建立獎項。</p>}
+            </section>
+            {can("award_manager") && <form className="award-rules" onSubmit={(formEvent) => {
+              formEvent.preventDefault();
+              const form = new FormData(formEvent.currentTarget);
+              void action({
+                type: "award_rules",
+                eventId: event.id,
+                allowMultiplePerSubmission: form.get("allow_multiple_submission") === "on",
+                allowMultiplePerPlayer: form.get("allow_multiple_player") === "on",
+                topThreeCanReceiveSpecial: form.get("top_three_special") === "on",
+                maxAwardsPerPlayer: Number(form.get("max_player")),
+                maxAwardsPerSubmission: Number(form.get("max_submission")),
+                tieHandling: form.get("tie_handling"),
+                allowManualTieWinner: form.get("manual_tie") === "on",
+              });
+            }}>
+              <h2>得獎衝突規則</h2>
+              <label><input type="checkbox" name="allow_multiple_submission" defaultChecked={awardRules?.allow_multiple_per_submission !== false} /> 同一作品可獲多個獎</label>
+              <label><input type="checkbox" name="allow_multiple_player" defaultChecked={awardRules?.allow_multiple_per_player !== false} /> 同一玩家可獲多個獎</label>
+              <label><input type="checkbox" name="top_three_special" defaultChecked={awardRules?.top_three_can_receive_special !== false} /> 前三名可再獲特別獎</label>
+              <label>每位玩家最多獎項<input type="number" name="max_player" min={1} defaultValue={String(awardRules?.max_awards_per_player ?? "")} /></label>
+              <label>每件作品最多獎項<input type="number" name="max_submission" min={1} defaultValue={String(awardRules?.max_awards_per_submission ?? "")} /></label>
+              <label>同票處理<select name="tie_handling" defaultValue={String(awardRules?.tie_handling ?? "joint")}><option value="joint">並列名次</option><option value="admin_decision">管理員決選</option><option value="earliest_submission">較早投稿</option><option value="unresolved">保持未決定</option></select></label>
+              <label><input type="checkbox" name="manual_tie" defaultChecked={awardRules?.allow_manual_tie_winner === true} /> 允許管理員手動指定同票優勝者</label>
+              <button className="primary" disabled={busy}>儲存衝突規則</button>
+            </form>}
+          </>
+        )}
+
+        {activeTab === "backups" && (
+          <>
+            <header className="admin-heading"><div><small>BACKUP & EXPORT</small><h1>備份與匯出</h1></div><button disabled={busy} onClick={() => action({ type: "snapshot", eventId: event.id })}>建立活動快照</button></header>
+            <div className="export-grid">
+              {[
+                ["players", "玩家名單"],
+                ["entries", "投稿名單"],
+                ["vote_stats", "投票統計"],
+                ["leaderboard", "排行榜"],
+                ["awards", "得獎名單"],
+                ["award_settings", "獎項設定"],
+                ["announcements", "公告紀錄"],
+                ...(can("audit_viewer") ? [["audit", "操作紀錄"]] : []),
+                ...(isSuperAdmin ? [["vote_details", "完整投票明細"]] : []),
+              ].map(([kind, label]) => <a key={kind} href={`/api/admin/export?kind=${kind}`}>下載 {label} CSV</a>)}
+            </div>
+            <section className="snapshot-list"><h2>活動快照</h2>{snapshots.length ? snapshots.map((snapshot) => <a key={snapshot.id} href={`/api/admin/snapshots/${snapshot.id}`}>{new Date(snapshot.created_at).toLocaleString("zh-TW")} · {snapshot.id}</a>) : <p className="muted">尚未建立快照。</p>}</section>
+          </>
+        )}
+
+        {activeTab === "audit" && (
+          <>
+            <header className="admin-heading"><div><small>AUDIT LOG</small><h1>操作紀錄</h1></div><a href="/api/admin/export?kind=audit">匯出 CSV</a></header>
+            <article className="table audit-table">{auditLogs.length ? auditLogs.map((log) => <div key={log.id}><b>#{log.id}</b><span>{log.actor_nickname}<small>{log.actor_discord_id}</small></span><code>{log.action_type}</code><span>{log.target_type} · {log.target_id}</span><i>{log.result}</i><time>{new Date(log.created_at).toLocaleString("zh-TW")}</time>{isSuperAdmin && <button disabled={busy} onClick={() => confirm(`準備依操作紀錄 #${log.id} 執行安全復原。投票、票數與投稿核心欄位不會被覆蓋。`) && prompt("請輸入「確認復原」以繼續") === "確認復原" && action({ type: "safe_restore", auditId: log.id })}>安全復原</button>}</div>) : <p className="muted">目前沒有操作紀錄。</p>}</article>
           </>
         )}
 
         {message && <div className="toast">{message}</div>}
       </section>
+      {editingPlayer && <div className="backdrop" onMouseDown={(e) => e.currentTarget === e.target && !busy && setEditingPlayer(null)}>
+        <section className="modal">
+          <button className="close" type="button" disabled={busy} onClick={() => setEditingPlayer(null)}>×</button>
+          <i className="modal-seal">人</i><h2>編輯玩家</h2>
+          <p>Discord ID：<code>{editingPlayer.discord_id}</code>（不可修改）</p>
+          <form className="name-form" onSubmit={savePlayer}>
+            <label>活動暱稱<input name="nickname" defaultValue={editingPlayer.nickname} maxLength={20} required /></label>
+            <label>管理備註<textarea name="note" defaultValue={editingPlayer.admin_note ?? ""} maxLength={1000} rows={4} /></label>
+            <button className="primary" disabled={busy}>{busy ? "儲存中…" : "儲存玩家資料"}</button>
+          </form>
+        </section>
+      </div>}
     </>
   );
 }

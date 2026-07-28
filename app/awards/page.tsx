@@ -5,6 +5,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { canShowAwards } from "@/lib/types";
+import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,7 @@ export default async function AwardsPage() {
     name: string;
     description: string | null;
     winner: ResultEntry | null;
+    unresolvedTie: boolean;
   }> = [];
 
   if (event) {
@@ -55,40 +57,51 @@ export default async function AwardsPage() {
       { data: awards },
       { data: assignments },
     ] = await Promise.all([
-      ids.length ? admin.from("votes").select("entry_id").in("entry_id", ids) : Promise.resolve({ data: [] }),
+      ids.length ? admin.from("votes").select("entry_id,created_at").in("entry_id", ids) : Promise.resolve({ data: [] }),
       ids.length ? admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", ids).eq("position", 1) : Promise.resolve({ data: [] }),
       ownerIds.length ? admin.from("profiles").select("id,nickname,is_disqualified").in("id", ownerIds) : Promise.resolve({ data: [] }),
       admin.from("award_rules").select("tie_handling").eq("event_id", event.id).maybeSingle(),
       admin.from("awards").select("*").eq("event_id", event.id).eq("is_archived", false).order("sort_order"),
       admin.from("award_assignments").select("*"),
     ]);
-    const tieHandling = rules?.tie_handling ?? "joint";
+    const tieHandling = isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint";
     const source = (entries ?? []).filter(
       (entry) => !owners?.find((owner) => owner.id === entry.owner_id)?.is_disqualified,
     ).map((entry) => ({
       ...entry,
       nickname: owners?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知玩家",
       image: images?.find((image) => image.entry_id === entry.id)?.storage_path ?? "",
-      votes: votes?.filter((vote) => vote.entry_id === entry.id).length ?? 0,
+      votes: 0,
       rank: 0,
-    })).sort((a, b) =>
-      b.votes - a.votes
-      || (tieHandling === "earliest_submission" ? Date.parse(a.created_at) - Date.parse(b.created_at) : a.id - b.id),
+    }));
+    const ranking = calculateAwardRanking(
+      source.map((entry) => ({ id: entry.id, created_at: entry.created_at })),
+      votes ?? [],
+      tieHandling,
     );
-    let previousVotes: number | null = null;
-    let currentRank = 0;
-    ranked = source.map((entry, index) => {
-      if (tieHandling === "earliest_submission" || previousVotes !== entry.votes) currentRank = index + 1;
-      previousVotes = entry.votes;
-      return { ...entry, rank: currentRank };
+    ranked = ranking.map((position) => {
+      const entry = source.find((item) => item.id === position.entryId);
+      return {
+        ...entry!,
+        votes: position.votes,
+        rank: position.rank,
+      };
     });
     customAwards = (awards ?? []).filter((award) => award.is_active).map((award) => {
-      const assignment = assignments?.find((item) => item.award_id === award.id);
+      const automaticCandidates = award.ranking_position
+        ? ranked.filter((entry) => entry.rank === award.ranking_position)
+        : [];
+      const assignment = award.ranking_position
+        ? null
+        : assignments?.find((item) => item.award_id === award.id);
       return {
         id: award.id,
         name: award.name,
         description: award.description,
-        winner: ranked.find((entry) => entry.id === assignment?.submission_id) ?? null,
+        winner: award.ranking_position
+          ? automaticCandidates.length === 1 ? automaticCandidates[0] : null
+          : ranked.find((entry) => entry.id === assignment?.submission_id) ?? null,
+        unresolvedTie: automaticCandidates.length > 1,
       };
     });
   }
@@ -135,7 +148,7 @@ export default async function AwardsPage() {
                   {award.winner.image && <Image src={award.winner.image} alt={award.winner.character_name} width={120} height={120} />}
                   <span><b>{award.winner.entry_code ?? `#${award.winner.id}`} · {award.winner.character_name}</b><small>{showAuthors ? award.winner.nickname : "匿名參賽者"}</small></span>
                 </Link>
-              ) : <strong>尚未公布</strong>}
+              ) : <strong>{published && award.unresolvedTie ? "同票，尚待依規則決定" : "尚未公布"}</strong>}
             </article>
           )) : <p className="muted">目前尚未建立自訂獎項。</p>}
         </section>

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isSuperAdminDiscordId, type AdminPermissions } from "@/lib/admin-access";
 import type { EventRecord } from "@/lib/types";
+import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 import AdminClient from "./AdminClient";
 import AdminRoleManager from "./AdminRoleManager";
 
@@ -26,13 +27,13 @@ export default async function AdminPage() {
   const { data: eventData } = await admin.from("events").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle();
   const event = eventData as EventRecord | null;
   const [{ data: rawEntries }, { data: rawPlayers }, { data: rawVotes }, { data: announcements }] = await Promise.all([
-    event && (has("submission_viewer") || has("submission_manager") || has("award_manager"))
+    event && (has("submission_viewer") || has("submission_manager") || has("award_manager") || has("award_assigner"))
       ? admin.from("entries").select("id,entry_code,event_id,owner_id,character_name,source_game,created_at,uses_ai_background,original_image_path,status,withdrawn_at").eq("event_id", event.id).order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
     has("player_manager") || has("eligibility_manager") || isSuperAdmin
       ? admin.from("profiles").select("id,discord_id,nickname,is_admin,is_disqualified,admin_note,created_at").order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
-    event && (has("statistics_viewer") || has("report_viewer"))
+    event && (has("statistics_viewer") || has("report_viewer") || has("award_manager") || has("award_assigner"))
       ? admin.from("votes").select("id,entry_id,voter_id,created_at").eq("event_id", event.id).order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
     event && has("announcement_manager")
@@ -40,20 +41,29 @@ export default async function AdminPage() {
       : Promise.resolve({ data: [] }),
   ]);
   const players = rawPlayers ?? [];
+  const relatedProfileIds = [...new Set([
+    ...(rawEntries ?? []).map((entry) => entry.owner_id),
+    ...((has("statistics_viewer") || has("report_viewer"))
+      ? (rawVotes ?? []).map((vote) => vote.voter_id)
+      : []),
+  ])];
+  const { data: relatedProfiles } = relatedProfileIds.length
+    ? await admin.from("profiles").select("id,nickname,is_disqualified").in("id", relatedProfileIds)
+    : { data: [] };
   const entryIds = (rawEntries ?? []).map((entry) => entry.id);
   const { data: entryImages } = entryIds.length
     ? await admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", entryIds).order("position")
     : { data: [] };
   const entries = (rawEntries ?? []).map((entry) => ({
     ...entry,
-    nickname: players.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知",
+    nickname: relatedProfiles?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知",
     images: (entryImages ?? []).filter((image) => image.entry_id === entry.id).map((image) => image.storage_path),
   }));
-  const voteRecords = (rawVotes ?? []).map((vote) => ({
+  const voteRecords = (has("statistics_viewer") || has("report_viewer") ? rawVotes ?? [] : []).map((vote) => ({
     id: vote.id,
     entry_id: vote.entry_id,
     created_at: vote.created_at,
-    voter_nickname: players.find((player) => player.id === vote.voter_id)?.nickname ?? "未知玩家",
+    voter_nickname: relatedProfiles?.find((player) => player.id === vote.voter_id)?.nickname ?? "未知玩家",
     character_name: entries.find((entry) => entry.id === vote.entry_id)?.character_name ?? "已刪除作品",
   }));
   const [
@@ -71,6 +81,26 @@ export default async function AdminPage() {
     event && has("report_viewer") ? admin.from("activity_snapshots").select("id,event_id,created_by,created_at").eq("event_id", event.id).order("created_at", { ascending: false }) : Promise.resolve({ data: [] }),
     has("audit_viewer") ? admin.from("audit_logs").select("id,actor_discord_id,actor_nickname,action_type,target_type,target_id,result,failure_reason,created_at").order("created_at", { ascending: false }).limit(200) : Promise.resolve({ data: [] }),
   ]);
+  const tieHandling = isTieHandling(awardRules?.tie_handling) ? awardRules.tie_handling : "joint";
+  const awardRanking = calculateAwardRanking(
+    entries
+      .filter((entry) => (
+        entry.status === "approved"
+        && !entry.withdrawn_at
+        && !relatedProfiles?.find((profile) => profile.id === entry.owner_id)?.is_disqualified
+      ))
+      .map((entry) => ({ id: entry.id, created_at: entry.created_at })),
+    (rawVotes ?? []).map((vote) => ({ entry_id: vote.entry_id, created_at: vote.created_at })),
+    tieHandling,
+  ).map((ranking) => {
+    const entry = entries.find((item) => item.id === ranking.entryId);
+    return {
+      ...ranking,
+      entryCode: entry?.entry_code ?? `#${ranking.entryId}`,
+      characterName: entry?.character_name ?? "未知作品",
+      nickname: entry?.nickname ?? "未知玩家",
+    };
+  });
   const playersWithRoles = players.map((player) => ({
     ...player,
     admin_role: roleRows?.find((role) => role.profile_id === player.id) ?? null,
@@ -91,6 +121,7 @@ export default async function AdminPage() {
           awards={awards ?? []}
           assignments={assignments ?? []}
           awardRules={awardRules}
+          awardRanking={awardRanking}
           snapshots={snapshots ?? []}
           auditLogs={auditLogs ?? []}
         />

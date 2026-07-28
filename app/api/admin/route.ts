@@ -9,6 +9,7 @@ import {
 } from "@/lib/admin-auth";
 import type { AdminPermission } from "@/lib/admin-access";
 import { hasValidTimeline, type EventStatus } from "@/lib/types";
+import { isTieHandling } from "@/lib/award-ranking";
 
 const eventDateFields = [
   "submission_starts_at",
@@ -336,11 +337,25 @@ export async function POST(request: Request) {
       const awardId = type === "award_update" ? String(body.awardId ?? "") : null;
       const name = String(body.name ?? "").trim();
       if (!name || name.length > 80) return response("invalid_award_name", "獎項名稱不可空白，且最多 80 字。", 400);
+      const rawRankingPosition = body.rankingPosition;
+      const rankingPosition = rawRankingPosition === null
+        || rawRankingPosition === undefined
+        || rawRankingPosition === ""
+        || Number(rawRankingPosition) === 0
+        ? null
+        : Number(rawRankingPosition);
+      if (
+        rankingPosition !== null
+        && (!Number.isInteger(rankingPosition) || rankingPosition < 1 || rankingPosition > 999)
+      ) {
+        return response("invalid_ranking_position", "自動排名必須介於第 1 名至第 999 名。", 400);
+      }
       const payload = {
         event_id: String(body.eventId ?? ""),
         name,
         description: String(body.description ?? "").trim().slice(0, 1000) || null,
-        award_type: String(body.awardType ?? "custom").slice(0, 40),
+        award_type: rankingPosition ? "ranking" : "custom",
+        ranking_position: rankingPosition,
         sort_order: Number.isInteger(body.sortOrder) ? Number(body.sortOrder) : 0,
         is_active: body.isActive !== false,
         is_archived: body.isArchived === true,
@@ -374,6 +389,9 @@ export async function POST(request: Request) {
         admin.from("award_assignments").select("*").eq("award_id", awardId).maybeSingle(),
       ]);
       if (!award || !entry || award.event_id !== entry.event_id) return response("award_entry_mismatch", "獎項與作品不屬於同一活動。", 422);
+      if (award.ranking_position) {
+        return response("ranking_award_is_automatic", "此獎項由票數排名自動決定，不需手動指派作品。", 422);
+      }
       const { data: otherAssignments } = await admin
         .from("award_assignments")
         .select("id,award_id,submission_id,awards!inner(event_id),entries!inner(owner_id)")
@@ -449,7 +467,7 @@ export async function POST(request: Request) {
         top_three_can_receive_special: body.topThreeCanReceiveSpecial !== false,
         max_awards_per_player: Number(body.maxAwardsPerPlayer) > 0 ? Number(body.maxAwardsPerPlayer) : null,
         max_awards_per_submission: Number(body.maxAwardsPerSubmission) > 0 ? Number(body.maxAwardsPerSubmission) : null,
-        tie_handling: ["joint", "admin_decision", "earliest_submission", "unresolved"].includes(String(body.tieHandling)) ? body.tieHandling : "joint",
+        tie_handling: isTieHandling(body.tieHandling) ? body.tieHandling : "joint",
         allow_manual_tie_winner: body.allowManualTieWinner === true,
         updated_by: context.profile.id,
         updated_at: new Date().toISOString(),

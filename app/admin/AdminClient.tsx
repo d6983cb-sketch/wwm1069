@@ -45,8 +45,27 @@ type AnnouncementRecord = {
   published_at: string;
   is_active: boolean;
 };
-type AwardRecord = { id: string; name: string; description: string | null; sort_order: number; is_active: boolean; is_archived: boolean };
+type AwardRecord = {
+  id: string;
+  name: string;
+  description: string | null;
+  award_type: string;
+  ranking_position: number | null;
+  sort_order: number;
+  is_active: boolean;
+  is_archived: boolean;
+};
 type AssignmentRecord = { id: string; award_id: string; submission_id: number };
+type AwardRankingRecord = {
+  entryId: number;
+  entryCode: string;
+  characterName: string;
+  nickname: string;
+  rank: number;
+  votes: number;
+  reachedAt: string | null;
+  hasEqualVotes: boolean;
+};
 type SnapshotRecord = { id: string; created_at: string; created_by: string | null };
 type AuditRecord = {
   id: number;
@@ -95,6 +114,7 @@ export default function AdminClient({
   awards,
   assignments,
   awardRules,
+  awardRanking,
   snapshots,
   auditLogs,
 }: {
@@ -109,6 +129,7 @@ export default function AdminClient({
   awards: AwardRecord[];
   assignments: AssignmentRecord[];
   awardRules: Record<string, unknown> | null;
+  awardRanking: AwardRankingRecord[];
   snapshots: SnapshotRecord[];
   auditLogs: AuditRecord[];
 }) {
@@ -118,6 +139,7 @@ export default function AdminClient({
   const [busy, setBusy] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<AdminPlayer | null>(null);
   const [selectedAwardEntry, setSelectedAwardEntry] = useState<Record<string, string>>({});
+  const [selectedAwardRank, setSelectedAwardRank] = useState<Record<string, string>>({});
   const can = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
   const visibleTabs = useMemo(() => tabs.filter((tab) => {
     const allowed = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
@@ -514,18 +536,46 @@ export default function AdminClient({
             {can("award_manager") && <form className="award-create" onSubmit={(formEvent) => {
               formEvent.preventDefault();
               const form = new FormData(formEvent.currentTarget);
-              void action({ type: "award_create", eventId: event.id, name: form.get("name"), description: form.get("description"), sortOrder: awards.length });
+              void action({
+                type: "award_create",
+                eventId: event.id,
+                name: form.get("name"),
+                description: form.get("description"),
+                rankingPosition: Number(form.get("ranking_position")),
+                sortOrder: awards.length,
+              });
             }}>
               <input name="name" maxLength={80} required placeholder="新增獎項名稱" />
               <input name="description" maxLength={1000} placeholder="獎項說明" />
+              <select name="ranking_position" defaultValue="0" aria-label="得獎方式">
+                <option value="0">手動選擇得獎作品</option>
+                {Array.from({ length: 20 }, (_, index) => (
+                  <option key={index + 1} value={index + 1}>票數排名第 {index + 1} 名</option>
+                ))}
+              </select>
               <button className="primary" disabled={busy}>新增獎項</button>
             </form>}
             <section className="award-admin-list">
               {awards.length ? awards.map((award) => {
                 const assigned = assignments.find((item) => item.award_id === award.id);
+                const automaticCandidates = award.ranking_position
+                  ? awardRanking.filter((item) => item.rank === award.ranking_position)
+                  : [];
+                const automaticWinner = automaticCandidates.length === 1 ? automaticCandidates[0] : null;
                 return <article key={award.id} className={award.is_archived ? "archived" : ""}>
                   <header><div><h2>{award.name}</h2><p>{award.description || "無說明"}</p></div><span>{award.is_archived ? "已封存" : award.is_active ? "啟用" : "停用"}</span></header>
-                  <p>目前指派：{assigned ? entries.find((entry) => entry.id === assigned.submission_id)?.entry_code ?? `#${assigned.submission_id}` : "尚未公布"}</p>
+                  {award.ranking_position ? (
+                    <p>
+                      自動獎項：第 {award.ranking_position} 名 ·{" "}
+                      {automaticWinner
+                        ? `${automaticWinner.entryCode} ${automaticWinner.characterName}（${automaticWinner.votes} 票）`
+                        : automaticCandidates.length > 1
+                          ? `目前有 ${automaticCandidates.length} 件作品同票，請調整同票規則`
+                          : "目前尚無符合此名次的作品"}
+                    </p>
+                  ) : (
+                    <p>目前指派：{assigned ? entries.find((entry) => entry.id === assigned.submission_id)?.entry_code ?? `#${assigned.submission_id}` : "尚未公布"}</p>
+                  )}
                   {can("award_manager") && !award.is_archived && <button disabled={busy} onClick={() => {
                     const name = prompt("獎項名稱", award.name)?.trim();
                     if (!name) return;
@@ -536,11 +586,35 @@ export default function AdminClient({
                       awardId: award.id,
                       name,
                       description,
+                      rankingPosition: award.ranking_position,
                       sortOrder: award.sort_order,
                       isActive: award.is_active,
                     });
                   }}>編輯獎項</button>}
-                  {can("award_assigner") && !award.is_archived && <div className="award-assign">
+                  {can("award_manager") && !award.is_archived && <div className="award-rank-setting">
+                    <label htmlFor={`award-rank-${award.id}`}>得獎方式</label>
+                    <select
+                      id={`award-rank-${award.id}`}
+                      value={selectedAwardRank[award.id] ?? String(award.ranking_position ?? 0)}
+                      onChange={(e) => setSelectedAwardRank((current) => ({ ...current, [award.id]: e.target.value }))}
+                    >
+                      <option value="0">手動選擇得獎作品</option>
+                      {Array.from({ length: 20 }, (_, index) => (
+                        <option key={index + 1} value={index + 1}>票數排名第 {index + 1} 名</option>
+                      ))}
+                    </select>
+                    <button disabled={busy} onClick={() => action({
+                      type: "award_update",
+                      eventId: event.id,
+                      awardId: award.id,
+                      name: award.name,
+                      description: award.description,
+                      rankingPosition: Number(selectedAwardRank[award.id] ?? award.ranking_position ?? 0),
+                      sortOrder: award.sort_order,
+                      isActive: award.is_active,
+                    })}>儲存得獎方式</button>
+                  </div>}
+                  {can("award_assigner") && !award.is_archived && !award.ranking_position && <div className="award-assign">
                     <select value={selectedAwardEntry[award.id] ?? String(assigned?.submission_id ?? "")} onChange={(e) => setSelectedAwardEntry((current) => ({ ...current, [award.id]: e.target.value }))}>
                       <option value="">選擇得獎作品</option>
                       {entries.filter((entry) => !entry.withdrawn_at && entry.status === "approved").map((entry) => <option key={entry.id} value={entry.id}>{entry.entry_code ?? `#${entry.id}`} · {entry.character_name} · {entry.nickname}</option>)}
@@ -573,7 +647,7 @@ export default function AdminClient({
               <label><input type="checkbox" name="top_three_special" defaultChecked={awardRules?.top_three_can_receive_special !== false} /> 前三名可再獲特別獎</label>
               <label>每位玩家最多獎項<input type="number" name="max_player" min={1} defaultValue={String(awardRules?.max_awards_per_player ?? "")} /></label>
               <label>每件作品最多獎項<input type="number" name="max_submission" min={1} defaultValue={String(awardRules?.max_awards_per_submission ?? "")} /></label>
-              <label>同票處理<select name="tie_handling" defaultValue={String(awardRules?.tie_handling ?? "joint")}><option value="joint">並列名次</option><option value="admin_decision">管理員決選</option><option value="earliest_submission">較早投稿</option><option value="unresolved">保持未決定</option></select></label>
+              <label>同票處理<select name="tie_handling" defaultValue={String(awardRules?.tie_handling ?? "joint")}><option value="joint">並列名次</option><option value="admin_decision">管理員決選</option><option value="earliest_submission">較早投稿</option><option value="earliest_reached_votes">較早達到目前票數</option><option value="unresolved">保持未決定</option></select></label>
               <label><input type="checkbox" name="manual_tie" defaultChecked={awardRules?.allow_manual_tie_winner === true} /> 允許管理員手動指定同票優勝者</label>
               <button className="primary" disabled={busy}>儲存衝突規則</button>
             </form>}

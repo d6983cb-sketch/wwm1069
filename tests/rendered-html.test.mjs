@@ -31,3 +31,11 @@ test("new server-only tables explicitly grant service_role access", async () => 
   assert.match(migration, /public\.audit_logs_id_seq[\s\S]*to service_role;/);
   assert.doesNotMatch(migration, /to (?:anon|authenticated)\s*;/);
 });
+
+test("rank award migration cannot rewrite production entries or votes", async () => {
+  const migration = await readFile("supabase/migration-award-ranking.sql", "utf8");
+  assert.match(migration, /add column if not exists ranking_position integer/i);
+  assert.match(migration, /earliest_reached_votes/);
+  assert.doesNotMatch(migration, /\b(?:delete|update|insert)\s+(?:from|into)?\s*public\.(?:entries|votes)/i);
+  assert.doesNotMatch(migration, /\b(?:drop table|truncate)\b/i);
+});

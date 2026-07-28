@@ -39,3 +39,20 @@ test("rank award migration cannot rewrite production entries or votes", async ()
   assert.doesNotMatch(migration, /\b(?:delete|update|insert)\s+(?:from|into)?\s*public\.(?:entries|votes)/i);
   assert.doesNotMatch(migration, /\b(?:drop table|truncate)\b/i);
 });
+
+test("hardening migration preserves canonical contest data and blocks cascade deletion", async () => {
+  const migration = await readFile("supabase/migration-production-hardening.sql", "utf8");
+  assert.doesNotMatch(migration, /\b(?:drop\s+table|truncate)\b/i);
+  assert.doesNotMatch(migration, /\b(?:delete|update)\s+(?:from\s+)?public\.(?:entries|votes|profiles|entry_images)/i);
+  assert.match(migration, /ON DELETE RESTRICT/i);
+  assert.match(migration, /not ev\.voting_locked/);
+  assert.match(migration, /ev\.voting_override <> 'closed'/);
+  assert.match(migration, /revoke all on table[\s\S]*from anon, authenticated;/);
+});
+
+test("submission failure cleanup checks database references before deleting storage", async () => {
+  const source = await readFile("app/api/submissions/route.ts", "utf8");
+  assert.match(source, /removeUnreferencedUploads/);
+  assert.match(source, /\.from\("entry_images"\)[\s\S]*\.in\("storage_path", publicUrls\)/);
+  assert.match(source, /\.from\("entries"\)[\s\S]*\.eq\("original_image_path", originalPath\)/);
+});

@@ -16,6 +16,27 @@ async function removeUploads(entryPaths: string[], originalPath: string | null) 
   if (originalPath) await admin.storage.from("cos-originals").remove([originalPath]);
 }
 
+async function removeUnreferencedUploads(entryPaths: string[], originalPath: string | null) {
+  const admin = createAdminClient();
+  const cleanPaths = entryPaths.filter((path): path is string => typeof path === "string");
+  const publicUrls = cleanPaths.map(
+    (path) => admin.storage.from("cos-entries").getPublicUrl(path).data.publicUrl,
+  );
+  const [{ data: usedImages }, { data: usedOriginal }] = await Promise.all([
+    publicUrls.length
+      ? admin.from("entry_images").select("storage_path").in("storage_path", publicUrls)
+      : Promise.resolve({ data: [] }),
+    originalPath
+      ? admin.from("entries").select("original_image_path").eq("original_image_path", originalPath)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const referencedUrls = new Set((usedImages ?? []).map((image) => image.storage_path));
+  const removableEntryPaths = cleanPaths.filter(
+    (_path, index) => !referencedUrls.has(publicUrls[index]),
+  );
+  await removeUploads(removableEntryPaths, usedOriginal?.length ? null : originalPath);
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const admin = createAdminClient();
@@ -43,7 +64,7 @@ export async function POST(request: Request) {
     || sourceGame.length > 40
     || description.length > 500;
   if (invalid) {
-    await removeUploads(entryPaths.filter((path): path is string => typeof path === "string"), originalPath);
+    await removeUnreferencedUploads(entryPaths.filter((path): path is string => typeof path === "string"), originalPath);
     return NextResponse.json({ error: "invalid_submission" }, { status: 400 });
   }
 
@@ -52,7 +73,7 @@ export async function POST(request: Request) {
     admin.from("profiles").select("is_disqualified").eq("id", user.id).maybeSingle(),
   ]);
   if (!event || !isSubmissionOpen(event) || profile?.is_disqualified) {
-    await removeUploads(entryPaths as string[], originalPath);
+    await removeUnreferencedUploads(entryPaths as string[], originalPath);
     return NextResponse.json({ error: "submissions_closed" }, { status: 400 });
   }
 
@@ -63,7 +84,7 @@ export async function POST(request: Request) {
     .eq("owner_id", user.id)
     .maybeSingle();
   if (existing) {
-    await removeUploads(entryPaths as string[], originalPath);
+    await removeUnreferencedUploads(entryPaths as string[], originalPath);
     return NextResponse.json({ error: "duplicate_entry" }, { status: 409 });
   }
 
@@ -86,7 +107,7 @@ export async function POST(request: Request) {
     .single();
 
   if (entryError || !entry) {
-    await removeUploads(entryPaths as string[], originalPath);
+    await removeUnreferencedUploads(entryPaths as string[], originalPath);
     const error = entryError?.code === "23505" ? "duplicate_entry" : "entry_create_failed";
     return NextResponse.json({ error }, { status: error === "duplicate_entry" ? 409 : 400 });
   }
@@ -100,7 +121,7 @@ export async function POST(request: Request) {
   );
   if (imageError) {
     await admin.from("entries").delete().eq("id", entry.id);
-    await removeUploads(entryPaths as string[], originalPath);
+    await removeUnreferencedUploads(entryPaths as string[], originalPath);
     return NextResponse.json({ error: "image_records_failed" }, { status: 400 });
   }
 
@@ -109,7 +130,6 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   const supabase = await createClient();
-  const admin = createAdminClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const body = await request.json();
@@ -119,21 +139,6 @@ export async function DELETE(request: Request) {
   const originalPath = validPath(user.id, body.originalPath, "original")
     ? body.originalPath as string
     : null;
-  const publicUrls = entryPaths.map(
-    (path: string) => admin.storage.from("cos-entries").getPublicUrl(path).data.publicUrl,
-  );
-  const [{ data: usedImages }, { data: usedOriginal }] = await Promise.all([
-    publicUrls.length
-      ? admin.from("entry_images").select("storage_path").in("storage_path", publicUrls)
-      : Promise.resolve({ data: [] }),
-    originalPath
-      ? admin.from("entries").select("original_image_path").eq("original_image_path", originalPath)
-      : Promise.resolve({ data: [] }),
-  ]);
-  const referencedUrls = new Set((usedImages ?? []).map((image) => image.storage_path));
-  const removableEntryPaths = entryPaths.filter(
-    (path: string, index: number) => !referencedUrls.has(publicUrls[index]),
-  );
-  await removeUploads(removableEntryPaths, usedOriginal?.length ? null : originalPath);
+  await removeUnreferencedUploads(entryPaths, originalPath);
   return NextResponse.json({ ok: true });
 }

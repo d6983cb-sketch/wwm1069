@@ -44,6 +44,12 @@ type AnnouncementRecord = {
   body: string;
   published_at: string;
   is_active: boolean;
+  announcement_type: string;
+  audience: string;
+  target_profile_id: string | null;
+  requires_ack: boolean;
+  is_pinned: boolean;
+  expires_at: string | null;
 };
 type AwardRecord = {
   id: string;
@@ -177,6 +183,14 @@ export default function AdminClient({
         body: JSON.stringify({ ...payload, idempotencyKey: crypto.randomUUID() }),
       });
       const body = await response.json().catch(() => ({}));
+      if (
+        response.status === 409
+        && body.error === "award_conflict"
+        && Array.isArray(body.conflicts)
+        && confirm(`此指派有規則衝突：\n\n${body.conflicts.join("\n")}\n\n仍要由管理員確認指派嗎？`)
+      ) {
+        return action({ ...payload, confirmConflict: true });
+      }
       const errors: Record<string, string> = {
         invalid_event_order: "時間順序不正確：投稿開始 ＜ 投稿截止 ≤ 投票開始 ＜ 投票截止。",
         invalid_event_time: "日期或時間格式不正確。",
@@ -210,7 +224,7 @@ export default function AdminClient({
     formEvent.preventDefault();
     if (!event) return;
     const form = new FormData(formEvent.currentTarget);
-    const nextStatus = String(form.get("status") ?? "");
+    const nextStatus = String(form.get("status") ?? "auto");
     const privacyChanged =
       form.get("submission_identity_mode") !== (event.submission_identity_mode ?? "named")
       || form.get("voting_identity_mode") !== (event.voting_identity_mode ?? "named")
@@ -229,9 +243,10 @@ export default function AdminClient({
         voting_starts_at: readTaipeiDate(form, "voting_starts"),
         voting_ends_at: readTaipeiDate(form, "voting_ends"),
         submissions_locked: form.get("submissions_locked") === "on",
+        voting_locked: form.get("voting_locked") === "on",
         voting_override: form.get("voting_override"),
         leaderboard_mode: form.get("leaderboard_mode"),
-        status: form.get("status"),
+        status: nextStatus === "auto" ? null : nextStatus,
         submission_identity_mode: form.get("submission_identity_mode"),
         voting_identity_mode: form.get("voting_identity_mode"),
         reveal_authors_after_results: form.get("reveal_authors_after_results") === "on",
@@ -253,6 +268,7 @@ export default function AdminClient({
       targetProfileId: form.get("target_profile_id"),
       isPinned: form.get("is_pinned") === "on",
       requiresAck: form.get("requires_ack") === "on",
+      expiresAt: form.get("expires_at") ? readTaipeiDate(form, "expires_at") : null,
     });
   };
 
@@ -454,6 +470,11 @@ export default function AdminClient({
         {activeTab === "settings" && (
           <>
             <header className="admin-heading"><div><small>EVENT SETTINGS</small><h1>活動設定</h1></div></header>
+            {Date.parse(event.voting_ends_at) - Date.parse(event.voting_starts_at) < 10 * 60 * 1000 && (
+              <div className="toast" role="alert">
+                目前投票期間只有 {Math.max(0, Math.round((Date.parse(event.voting_ends_at) - Date.parse(event.voting_starts_at)) / 60000))} 分鐘，請確認投票截止時間是否正確。
+              </div>
+            )}
             <form className="event-form settings-form" onSubmit={updateEvent}>
               <label>活動名稱<input name="title" defaultValue={event.title} required /></label>
               <label>投稿開始（台北時間）<input name="submission_starts" type="datetime-local" defaultValue={toTaipeiInput(event.submission_starts_at)} required /></label>
@@ -468,7 +489,8 @@ export default function AdminClient({
                 </select>
               </label>
               <label>活動狀態
-                <select name="status" defaultValue={event.status ?? "draft"}>
+                <select name="status" defaultValue={event.status ?? "auto"}>
+                  <option value="auto">依活動時間自動切換</option>
                   <option value="draft">草稿</option>
                   <option value="submission_open">投稿開放</option>
                   <option value="submission_closed">投稿截止</option>
@@ -497,6 +519,7 @@ export default function AdminClient({
                 </select>
               </label>
               <label className="setting-check"><input name="submissions_locked" type="checkbox" defaultChecked={event.submissions_locked} /><span><b>鎖定投稿</b><small>停止接受新投稿</small></span></label>
+              <label className="setting-check"><input name="voting_locked" type="checkbox" defaultChecked={event.voting_locked} /><span><b>鎖定投票</b><small>即使狀態為投票開放，也停止投票與取消投票</small></span></label>
               <button className="primary" disabled={busy}>儲存活動設定</button>
             </form>
           </>
@@ -512,6 +535,7 @@ export default function AdminClient({
                 <select name="audience" defaultValue="all"><option value="all">所有人</option><option value="participants">參賽者</option><option value="submitters">已投稿者</option><option value="admins">管理員</option><option value="player">指定玩家</option></select>
                 <select name="target_profile_id" defaultValue=""><option value="">未指定玩家</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nickname} · {player.discord_id}</option>)}</select>
                 <textarea name="body" maxLength={5000} required rows={7} placeholder="輸入公告內容" />
+                <label>到期時間（選填，台北時間）<input type="datetime-local" name="expires_at" /></label>
                 <label><input type="checkbox" name="is_pinned" /> 置頂</label>
                 <label><input type="checkbox" name="requires_ack" /> 要求玩家確認</label>
                 <button className="primary" disabled={busy}>發布公告</button>
@@ -520,6 +544,26 @@ export default function AdminClient({
                 <time>{new Date(announcement.published_at).toLocaleString("zh-TW")} · {announcement.is_active ? "啟用" : "已撤下"}</time>
                 {announcement.title && <b>{announcement.title}</b>}
                 <p>{announcement.body}</p>
+                {announcement.expires_at && <small>到期：{new Date(announcement.expires_at).toLocaleString("zh-TW")}</small>}
+                <button disabled={busy} onClick={() => {
+                  const title = prompt("公告標題", announcement.title ?? "") ?? announcement.title ?? "";
+                  const body = prompt("公告內容", announcement.body);
+                  if (!body?.trim()) return;
+                  void action({
+                    type: "announcement_update",
+                    eventId: event.id,
+                    announcementId: announcement.id,
+                    title,
+                    body,
+                    announcementType: announcement.announcement_type,
+                    audience: announcement.audience,
+                    targetProfileId: announcement.target_profile_id,
+                    isPinned: announcement.is_pinned,
+                    isActive: announcement.is_active,
+                    requiresAck: announcement.requires_ack,
+                    expiresAt: announcement.expires_at,
+                  });
+                }}>編輯公告</button>
                 {announcement.is_active && <button
                   className="danger"
                   disabled={busy}
@@ -556,7 +600,7 @@ export default function AdminClient({
               <button className="primary" disabled={busy}>新增獎項</button>
             </form>}
             <section className="award-admin-list">
-              {awards.length ? awards.map((award) => {
+              {awards.length ? awards.map((award, awardIndex) => {
                 const assigned = assignments.find((item) => item.award_id === award.id);
                 const automaticCandidates = award.ranking_position
                   ? awardRanking.filter((item) => item.rank === award.ranking_position)
@@ -564,6 +608,20 @@ export default function AdminClient({
                 const automaticWinner = automaticCandidates.length === 1 ? automaticCandidates[0] : null;
                 return <article key={award.id} className={award.is_archived ? "archived" : ""}>
                   <header><div><h2>{award.name}</h2><p>{award.description || "無說明"}</p></div><span>{award.is_archived ? "已封存" : award.is_active ? "啟用" : "停用"}</span></header>
+                  {can("award_manager") && !award.is_archived && <div className="row-actions">
+                    <button disabled={busy || awardIndex === 0} onClick={() => action({ type: "award_reorder", eventId: event.id, awardId: award.id, direction: "up" })}>上移</button>
+                    <button disabled={busy || awardIndex === awards.length - 1} onClick={() => action({ type: "award_reorder", eventId: event.id, awardId: award.id, direction: "down" })}>下移</button>
+                    {!award.is_active && <button disabled={busy} onClick={() => action({
+                      type: "award_update",
+                      eventId: event.id,
+                      awardId: award.id,
+                      name: award.name,
+                      description: award.description,
+                      rankingPosition: award.ranking_position,
+                      sortOrder: award.sort_order,
+                      isActive: true,
+                    })}>重新啟用</button>}
+                  </div>}
                   {award.ranking_position ? (
                     <p>
                       自動獎項：第 {award.ranking_position} 名 ·{" "}
@@ -614,12 +672,24 @@ export default function AdminClient({
                       isActive: award.is_active,
                     })}>儲存得獎方式</button>
                   </div>}
-                  {can("award_assigner") && !award.is_archived && !award.ranking_position && <div className="award-assign">
+                  {can("award_assigner") && !award.is_archived && (
+                    !award.ranking_position
+                    || (
+                      automaticCandidates.length > 1
+                      && (
+                        awardRules?.tie_handling === "admin_decision"
+                        || awardRules?.allow_manual_tie_winner === true
+                      )
+                    )
+                  ) && <div className="award-assign">
                     <select value={selectedAwardEntry[award.id] ?? String(assigned?.submission_id ?? "")} onChange={(e) => setSelectedAwardEntry((current) => ({ ...current, [award.id]: e.target.value }))}>
                       <option value="">選擇得獎作品</option>
-                      {entries.filter((entry) => !entry.withdrawn_at && entry.status === "approved").map((entry) => <option key={entry.id} value={entry.id}>{entry.entry_code ?? `#${entry.id}`} · {entry.character_name} · {entry.nickname}</option>)}
+                      {(award.ranking_position
+                        ? automaticCandidates.map((candidate) => entries.find((entry) => entry.id === candidate.entryId)).filter((entry): entry is PendingEntry => Boolean(entry))
+                        : entries.filter((entry) => !entry.withdrawn_at && entry.status === "approved")
+                      ).map((entry) => <option key={entry.id} value={entry.id}>{entry.entry_code ?? `#${entry.id}`} · {entry.character_name} · {entry.nickname}</option>)}
                     </select>
-                    <button disabled={busy || !selectedAwardEntry[award.id] && !assigned} onClick={() => action({ type: "award_assignment_set", eventId: event.id, awardId: award.id, submissionId: Number(selectedAwardEntry[award.id] ?? assigned?.submission_id) })}>指派</button>
+                    <button disabled={busy || !selectedAwardEntry[award.id] && !assigned} onClick={() => action({ type: "award_assignment_set", eventId: event.id, awardId: award.id, submissionId: Number(selectedAwardEntry[award.id] ?? assigned?.submission_id) })}>{award.ranking_position ? "決選指定" : "指派"}</button>
                     {assigned && <button className="danger" disabled={busy} onClick={() => confirm(`確定解除「${award.name}」的得獎作品？`) && action({ type: "award_assignment_remove", awardId: award.id })}>解除</button>}
                   </div>}
                   {can("award_manager") && !award.is_archived && <button disabled={busy} onClick={() => confirm(`確定停用或封存獎項「${award.name}」？`) && action({ type: "award_archive", awardId: award.id, archive: Boolean(assigned) })}>{assigned ? "封存獎項" : "停用獎項"}</button>}

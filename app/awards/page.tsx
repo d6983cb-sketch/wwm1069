@@ -36,7 +36,7 @@ export default async function AwardsPage() {
     id: string;
     name: string;
     description: string | null;
-    winner: ResultEntry | null;
+    winners: ResultEntry[];
     unresolvedTie: boolean;
   }> = [];
 
@@ -56,13 +56,15 @@ export default async function AwardsPage() {
       { data: rules },
       { data: awards },
       { data: assignments },
+      { data: exclusions },
     ] = await Promise.all([
       ids.length ? admin.from("votes").select("entry_id,created_at").in("entry_id", ids) : Promise.resolve({ data: [] }),
       ids.length ? admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", ids).eq("position", 1) : Promise.resolve({ data: [] }),
       ownerIds.length ? admin.from("profiles").select("id,nickname,is_disqualified").in("id", ownerIds) : Promise.resolve({ data: [] }),
-      admin.from("award_rules").select("tie_handling").eq("event_id", event.id).maybeSingle(),
+      admin.from("award_rules").select("*").eq("event_id", event.id).maybeSingle(),
       admin.from("awards").select("*").eq("event_id", event.id).eq("is_archived", false).order("sort_order"),
       admin.from("award_assignments").select("*"),
+      admin.from("award_exclusions").select("award_a_id,award_b_id").eq("event_id", event.id),
     ]);
     const tieHandling = isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint";
     const source = (entries ?? []).filter(
@@ -87,21 +89,56 @@ export default async function AwardsPage() {
         rank: position.rank,
       };
     });
+    const submissionAwardCounts = new Map<number, number>();
+    const playerAwardCounts = new Map<string, number>();
+    const submissionAwardIds = new Map<number, Set<string>>();
     customAwards = (awards ?? []).filter((award) => award.is_active).map((award) => {
       const automaticCandidates = award.ranking_position
         ? ranked.filter((entry) => entry.rank === award.ranking_position)
         : [];
-      const assignment = award.ranking_position
-        ? null
-        : assignments?.find((item) => item.award_id === award.id);
+      const assignment = assignments?.find((item) => item.award_id === award.id);
+      const assignedWinner = ranked.find((entry) => entry.id === assignment?.submission_id);
+      const proposedWinners = award.ranking_position
+        ? (
+          automaticCandidates.length <= 1
+            ? automaticCandidates
+            : tieHandling === "joint"
+              ? automaticCandidates
+              : assignedWinner && automaticCandidates.some((entry) => entry.id === assignedWinner.id)
+                ? [assignedWinner]
+                : []
+        )
+        : assignedWinner ? [assignedWinner] : [];
+      const automaticWinners = proposedWinners.filter((winner) => {
+        const submissionCount = submissionAwardCounts.get(winner.id) ?? 0;
+        const playerCount = playerAwardCounts.get(winner.owner_id) ?? 0;
+        const priorAwardIds = submissionAwardIds.get(winner.id) ?? new Set<string>();
+        const mutuallyExclusive = (exclusions ?? []).some((rule) => (
+          rule.award_a_id === award.id && priorAwardIds.has(rule.award_b_id)
+          || rule.award_b_id === award.id && priorAwardIds.has(rule.award_a_id)
+        ));
+        if (mutuallyExclusive) return false;
+        if (rules?.allow_multiple_per_submission === false && submissionCount > 0) return false;
+        if (rules?.max_awards_per_submission && submissionCount >= rules.max_awards_per_submission) return false;
+        if (rules?.allow_multiple_per_player === false && playerCount > 0) return false;
+        if (rules?.max_awards_per_player && playerCount >= rules.max_awards_per_player) return false;
+        if (
+          rules?.top_three_can_receive_special === false
+          && award.award_type !== "ranking"
+          && winner.rank <= 3
+        ) return false;
+        submissionAwardCounts.set(winner.id, submissionCount + 1);
+        playerAwardCounts.set(winner.owner_id, playerCount + 1);
+        submissionAwardIds.set(winner.id, new Set([...priorAwardIds, award.id]));
+        return true;
+      });
       return {
         id: award.id,
         name: award.name,
         description: award.description,
-        winner: award.ranking_position
-          ? automaticCandidates.length === 1 ? automaticCandidates[0] : null
-          : ranked.find((entry) => entry.id === assignment?.submission_id) ?? null,
-        unresolvedTie: automaticCandidates.length > 1,
+        winners: automaticWinners,
+        unresolvedTie: proposedWinners.length > 0 && automaticWinners.length === 0
+          || automaticCandidates.length > 1 && automaticWinners.length === 0,
       };
     });
   }
@@ -143,12 +180,12 @@ export default async function AwardsPage() {
           {customAwards.length ? customAwards.map((award) => (
             <article key={award.id}>
               <div><h3>{award.name}</h3><p>{award.description || "未填寫獎項說明。"}</p></div>
-              {published && award.winner ? (
-                <Link href={`/entry/${award.winner.id}`}>
-                  {award.winner.image && <Image src={award.winner.image} alt={award.winner.character_name} width={120} height={120} />}
-                  <span><b>{award.winner.entry_code ?? `#${award.winner.id}`} · {award.winner.character_name}</b><small>{showAuthors ? award.winner.nickname : "匿名參賽者"}</small></span>
+              {published && award.winners.length ? award.winners.map((winner) => (
+                <Link href={`/entry/${winner.id}`} key={winner.id}>
+                  {winner.image && <Image src={winner.image} alt={winner.character_name} width={120} height={120} />}
+                  <span><b>{winner.entry_code ?? `#${winner.id}`} · {winner.character_name}</b><small>{showAuthors ? winner.nickname : "匿名參賽者"}</small></span>
                 </Link>
-              ) : <strong>{published && award.unresolvedTie ? "同票，尚待依規則決定" : "尚未公布"}</strong>}
+              )) : <strong>{published && award.unresolvedTie ? "同票，尚待依規則決定" : "尚未公布"}</strong>}
             </article>
           )) : <p className="muted">目前尚未建立自訂獎項。</p>}
         </section>

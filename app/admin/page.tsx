@@ -37,7 +37,7 @@ export default async function AdminPage() {
       ? admin.from("votes").select("id,entry_id,voter_id,created_at").eq("event_id", event.id).order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
     event && has("announcement_manager")
-      ? admin.from("announcements").select("id,title,body,announcement_type,audience,is_active,requires_ack,published_at").eq("event_id", event.id).order("published_at", { ascending: false }).limit(100)
+      ? admin.from("announcements").select("id,title,body,announcement_type,audience,target_profile_id,is_active,is_pinned,requires_ack,published_at,expires_at").eq("event_id", event.id).order("published_at", { ascending: false }).limit(100)
       : Promise.resolve({ data: [] }),
   ]);
   const players = rawPlayers ?? [];

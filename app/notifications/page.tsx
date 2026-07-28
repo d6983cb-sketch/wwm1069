@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isSuperAdminDiscordId } from "@/lib/admin-access";
 import NotificationList from "./NotificationList";
+import { canViewAnnouncement } from "@/lib/announcement-access";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export default async function NotificationsPage() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/");
   const [{ data: profile }, { data: event }] = await Promise.all([
-    admin.from("profiles").select("id,discord_id,nickname").eq("id", user.id).maybeSingle(),
+    admin.from("profiles").select("id,discord_id,nickname,is_disqualified").eq("id", user.id).maybeSingle(),
     admin.from("events").select("id").order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (!profile || !event) redirect("/");
@@ -25,12 +26,12 @@ export default async function NotificationsPage() {
     admin.from("announcement_receipts").select("*").eq("profile_id", user.id),
   ]);
   const isAdmin = isSuperAdminDiscordId(profile.discord_id) || role?.is_active === true;
-  const visible = (announcements ?? []).filter((announcement) => {
-    if (announcement.audience === "player") return announcement.target_profile_id === user.id;
-    if (announcement.audience === "admins") return isAdmin;
-    if (announcement.audience === "submitters") return Boolean(ownEntry);
-    return ["all", "participants"].includes(announcement.audience);
-  }).map((announcement) => {
+  const visible = (announcements ?? []).filter((announcement) => canViewAnnouncement(announcement, {
+    profileId: user.id,
+    isDisqualified: profile.is_disqualified === true,
+    isAdmin,
+    hasSubmission: Boolean(ownEntry),
+  })).map((announcement) => {
     const receipt = receipts?.find((item) => item.announcement_id === announcement.id);
     return {
       id: announcement.id,

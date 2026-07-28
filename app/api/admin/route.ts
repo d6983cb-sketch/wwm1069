@@ -9,7 +9,7 @@ import {
 } from "@/lib/admin-auth";
 import type { AdminPermission } from "@/lib/admin-access";
 import { hasValidTimeline, type EventStatus } from "@/lib/types";
-import { isTieHandling } from "@/lib/award-ranking";
+import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 
 const eventDateFields = [
   "submission_starts_at",
@@ -39,7 +39,7 @@ function response(error: string, message: string, status: number) {
   return NextResponse.json({ error, message }, { status });
 }
 
-function permissionFor(type: string): { permission?: AdminPermission; superOnly?: boolean } {
+function permissionFor(type: string): { permission?: AdminPermission; superOnly?: boolean } | null {
   if (["player_admin", "admin_permissions"].includes(type)) return { superOnly: true };
   if (type === "player_update") return { permission: "player_manager" };
   if (type === "player_disqualify") return { permission: "eligibility_manager" };
@@ -52,7 +52,7 @@ function permissionFor(type: string): { permission?: AdminPermission; superOnly?
   }
   if (type === "snapshot") return { permission: "report_viewer" };
   if (type === "safe_restore") return { superOnly: true };
-  return {};
+  return null;
 }
 
 async function rememberIdempotency(
@@ -74,7 +74,10 @@ async function rememberIdempotency(
     console.error("Idempotency lookup failed", lookupError.code, lookupError.message);
     return response("request_guard_failed", "安全檢查暫時失敗，資料尚未變更。", 500);
   }
-  if (existing) return NextResponse.json(existing.response_data ?? { ok: true, repeated: true });
+  if (existing?.response_data) return NextResponse.json(existing.response_data);
+  if (existing) {
+    return response("duplicate_request", "這個操作已送出或尚未完成，請重新整理後確認結果。", 409);
+  }
   const { error } = await admin.from("idempotency_keys").insert({
     key: clean,
     actor_profile_id: context.profile.id,
@@ -114,6 +117,7 @@ export async function POST(request: Request) {
   }
   const type = String(body.type ?? "");
   const access = permissionFor(type);
+  if (!access) return response("invalid_action", "不支援的管理操作。", 400);
   const auth = await authorizeAdmin(request, access.permission, access.superOnly);
   if (!auth.ok) return auth.response;
   const { context } = auth;
@@ -282,7 +286,7 @@ export async function POST(request: Request) {
         changes.title = String(changes.title ?? "").trim();
         if (!changes.title) return response("invalid_event_title", "活動名稱不可空白。", 400);
       }
-      if ("status" in changes && !eventStatuses.includes(String(changes.status) as EventStatus)) {
+      if ("status" in changes && changes.status !== null && !eventStatuses.includes(String(changes.status) as EventStatus)) {
         return response("invalid_event_status", "活動狀態不正確。", 400);
       }
       if (["submission_identity_mode", "voting_identity_mode"].some((key) => key in changes)
@@ -294,7 +298,7 @@ export async function POST(request: Request) {
       if (eventDateFields.some((field) => field in changes) && !hasValidTimeline({ ...before, ...changes } as never)) {
         return response("invalid_event_order", "活動時間順序不正確。", 400);
       }
-      const nextStatus = changes.status as EventStatus | undefined;
+      const nextStatus = changes.status as EventStatus | null | undefined;
       if ((before.status === "voting_closed" && nextStatus === "voting_open")
         || (before.status === "archived" && nextStatus && nextStatus !== "archived")) {
         if (!context.isSuperAdmin) return response("super_admin_required", "此狀態切換僅限最高管理員。", 403);
@@ -350,8 +354,11 @@ export async function POST(request: Request) {
       ) {
         return response("invalid_ranking_position", "自動排名必須介於第 1 名至第 999 名。", 400);
       }
+      const eventId = String(body.eventId ?? "");
+      const { data: eventExists } = await admin.from("events").select("id").eq("id", eventId).maybeSingle();
+      if (!eventExists) return response("event_not_found", "找不到活動。", 404);
       const payload = {
-        event_id: String(body.eventId ?? ""),
+        event_id: eventId,
         name,
         description: String(body.description ?? "").trim().slice(0, 1000) || null,
         award_type: rankingPosition ? "ranking" : "custom",
@@ -362,12 +369,43 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       };
       const { data: before } = awardId ? await admin.from("awards").select("*").eq("id", awardId).maybeSingle() : { data: null };
+      if (awardId && !before) return response("award_not_found", "找不到獎項。", 404);
+      if (before && before.event_id !== eventId) {
+        return response("award_event_mismatch", "獎項不屬於目前活動。", 422);
+      }
       const query = awardId
-        ? admin.from("awards").update(payload).eq("id", awardId)
+        ? admin.from("awards").update({ ...payload, event_id: before!.event_id }).eq("id", awardId).eq("event_id", eventId)
         : admin.from("awards").insert({ ...payload, created_by: context.profile.id });
       const { data: after, error } = await query.select("*").single();
       if (error) return response("award_save_failed", "獎項儲存失敗。", 500);
       await writeAuditLog({ context, actionType: type, targetType: "award", targetId: after.id, beforeData: before, afterData: after });
+    } else if (type === "award_reorder") {
+      const eventId = String(body.eventId ?? "");
+      const awardId = String(body.awardId ?? "");
+      const direction = String(body.direction ?? "");
+      if (!["up", "down"].includes(direction)) {
+        return response("invalid_award_order", "獎項排序方向不正確。", 400);
+      }
+      const { data: ordered } = await admin
+        .from("awards")
+        .select("id,event_id,sort_order")
+        .eq("event_id", eventId)
+        .order("sort_order")
+        .order("created_at");
+      const currentIndex = (ordered ?? []).findIndex((item) => item.id === awardId);
+      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+      if (currentIndex < 0) return response("award_not_found", "找不到獎項。", 404);
+      if (targetIndex < 0 || targetIndex >= (ordered ?? []).length) {
+        return response("award_order_unchanged", "獎項已在最前或最後。", 422);
+      }
+      const current = ordered![currentIndex];
+      const target = ordered![targetIndex];
+      const temporaryOrder = -1_000_000 - currentIndex;
+      const { error: firstError } = await admin.from("awards").update({ sort_order: temporaryOrder }).eq("id", current.id).eq("event_id", eventId);
+      const { error: secondError } = await admin.from("awards").update({ sort_order: current.sort_order }).eq("id", target.id).eq("event_id", eventId);
+      const { error: thirdError } = await admin.from("awards").update({ sort_order: target.sort_order }).eq("id", current.id).eq("event_id", eventId);
+      if (firstError || secondError || thirdError) return response("award_reorder_failed", "獎項排序失敗。", 500);
+      await writeAuditLog({ context, actionType: "award_reorder", targetType: "award", targetId: awardId, beforeData: current, afterData: { ...current, sort_order: target.sort_order } });
     } else if (type === "award_archive") {
       const awardId = String(body.awardId ?? "");
       const { data: before } = await admin.from("awards").select("*,award_assignments(id)").eq("id", awardId).maybeSingle();
@@ -384,13 +422,37 @@ export async function POST(request: Request) {
       const submissionId = Number(body.submissionId);
       const [{ data: award }, { data: entry }, { data: rules }, { data: current }] = await Promise.all([
         admin.from("awards").select("*").eq("id", awardId).maybeSingle(),
-        admin.from("entries").select("id,event_id,owner_id,entry_code").eq("id", submissionId).maybeSingle(),
+        admin.from("entries").select("id,event_id,owner_id,entry_code,status,withdrawn_at,created_at").eq("id", submissionId).maybeSingle(),
         admin.from("award_rules").select("*").eq("event_id", String(body.eventId ?? "")).maybeSingle(),
         admin.from("award_assignments").select("*").eq("award_id", awardId).maybeSingle(),
       ]);
       if (!award || !entry || award.event_id !== entry.event_id) return response("award_entry_mismatch", "獎項與作品不屬於同一活動。", 422);
+      const { data: owner } = await admin.from("profiles").select("is_disqualified").eq("id", entry.owner_id).maybeSingle();
+      if (entry.status !== "approved" || entry.withdrawn_at || owner?.is_disqualified) {
+        return response("entry_not_eligible", "只能指派已通過、未撤回且未取消資格的作品。", 422);
+      }
       if (award.ranking_position) {
-        return response("ranking_award_is_automatic", "此獎項由票數排名自動決定，不需手動指派作品。", 422);
+        if (rules?.tie_handling !== "admin_decision" && rules?.allow_manual_tie_winner !== true) {
+          return response("ranking_award_is_automatic", "此獎項由票數排名自動決定；只有管理員決選同票時可指定。", 422);
+        }
+        const [{ data: eligibleEntries }, { data: eventVotes }, { data: eventProfiles }] = await Promise.all([
+          admin.from("entries").select("id,owner_id,created_at,status,withdrawn_at").eq("event_id", entry.event_id),
+          admin.from("votes").select("entry_id,created_at").eq("event_id", entry.event_id),
+          admin.from("profiles").select("id,is_disqualified"),
+        ]);
+        const ranking = calculateAwardRanking(
+          (eligibleEntries ?? []).filter((item) => (
+            item.status === "approved"
+            && !item.withdrawn_at
+            && !eventProfiles?.find((profile) => profile.id === item.owner_id)?.is_disqualified
+          )),
+          eventVotes ?? [],
+          "joint",
+        );
+        const tiedCandidates = ranking.filter((item) => item.rank === award.ranking_position);
+        if (tiedCandidates.length < 2 || !tiedCandidates.some((item) => item.entryId === entry.id)) {
+          return response("invalid_tie_winner", "指定作品不在這個名次的同票候選名單中。", 422);
+        }
       }
       const { data: otherAssignments } = await admin
         .from("award_assignments")
@@ -502,6 +564,9 @@ export async function POST(request: Request) {
         ? await admin.from("announcements").select("*").eq("id", announcementId).maybeSingle()
         : { data: null };
       if (announcementId && !before) return response("announcement_not_found", "找不到公告。", 404);
+      if (before && before.event_id !== payload.event_id) {
+        return response("announcement_event_mismatch", "公告不屬於目前活動。", 422);
+      }
       const query = announcementId
         ? admin.from("announcements").update(payload).eq("id", announcementId)
         : admin.from("announcements").insert({ ...payload, created_by: context.profile.id });
@@ -625,14 +690,16 @@ export async function POST(request: Request) {
         { data: votes },
         { data: awards },
         { data: assignments },
+        { data: awardRules },
         { data: announcements },
       ] = await Promise.all([
         admin.from("events").select("*").eq("id", eventId).maybeSingle(),
         admin.from("profiles").select("id,discord_id,nickname,is_disqualified,created_at"),
         admin.from("entries").select("*").eq("event_id", eventId),
-        admin.from("votes").select("entry_id").eq("event_id", eventId),
+        admin.from("votes").select("entry_id,created_at").eq("event_id", eventId),
         admin.from("awards").select("*").eq("event_id", eventId),
         admin.from("award_assignments").select("*,awards!inner(event_id)").eq("awards.event_id", eventId),
+        admin.from("award_rules").select("*").eq("event_id", eventId).maybeSingle(),
         admin.from("announcements").select("*").eq("event_id", eventId),
       ]);
       if (!event) return response("event_not_found", "找不到活動。", 404);
@@ -642,7 +709,18 @@ export async function POST(request: Request) {
           return sum;
         }, {}),
       ).map(([submissionId, count]) => ({ submissionId: Number(submissionId), count }));
-      const snapshotData = { event, profiles, entries, voteCounts, awards, assignments, announcements };
+      const eligibleProfiles = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+      const tieHandling = isTieHandling(awardRules?.tie_handling) ? awardRules.tie_handling : "joint";
+      const rankingResult = calculateAwardRanking(
+        (entries ?? []).filter((entry) => (
+          entry.status === "approved"
+          && !entry.withdrawn_at
+          && !eligibleProfiles.get(entry.owner_id)?.is_disqualified
+        )),
+        votes ?? [],
+        tieHandling,
+      );
+      const snapshotData = { event, profiles, entries, voteCounts, rankingResult, awards, assignments, awardRules, announcements };
       const { data: snapshot, error } = await admin.from("activity_snapshots").insert({
         event_id: eventId,
         snapshot_data: snapshotData,

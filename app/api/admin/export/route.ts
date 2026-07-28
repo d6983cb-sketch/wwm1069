@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authorizeAdmin, writeAuditLog } from "@/lib/admin-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 
 function csvCell(value: unknown) {
   let text = value === null || value === undefined ? "" : String(value);
@@ -42,18 +43,28 @@ export async function GET(request: Request) {
       return [item.id, item.entry_code, item.owner_id, owner?.discord_id, owner?.nickname, item.character_name, item.source_game, item.status, item.withdrawn_at, item.created_at];
     });
   } else if (kind === "vote_stats" || kind === "leaderboard") {
-    const [{ data: entries }, { data: votes }, { data: profiles }] = await Promise.all([
-      admin.from("entries").select("id,entry_code,owner_id,character_name,source_game,created_at").eq("event_id", event.id),
-      admin.from("votes").select("entry_id").eq("event_id", event.id),
-      admin.from("profiles").select("id,nickname"),
+    const [{ data: entries }, { data: votes }, { data: profiles }, { data: rules }] = await Promise.all([
+      admin.from("entries").select("id,entry_code,owner_id,character_name,source_game,created_at,status,withdrawn_at").eq("event_id", event.id),
+      admin.from("votes").select("entry_id,created_at").eq("event_id", event.id),
+      admin.from("profiles").select("id,nickname,is_disqualified"),
+      admin.from("award_rules").select("tie_handling").eq("event_id", event.id).maybeSingle(),
     ]);
-    const ranked = (entries ?? []).map((entry) => ({
-      ...entry,
-      nickname: profiles?.find((profile) => profile.id === entry.owner_id)?.nickname ?? "",
-      count: votes?.filter((vote) => vote.entry_id === entry.id).length ?? 0,
-    })).sort((a, b) => b.count - a.count || Date.parse(a.created_at) - Date.parse(b.created_at));
+    const eligible = (entries ?? []).filter((entry) => (
+      entry.status === "approved"
+      && !entry.withdrawn_at
+      && !profiles?.find((profile) => profile.id === entry.owner_id)?.is_disqualified
+    ));
+    const ranking = calculateAwardRanking(
+      eligible,
+      votes ?? [],
+      isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint",
+    );
     headers = ["名次", "投稿 ID", "作品編號", "投稿者", "角色", "來源遊戲", "票數"];
-    rows = ranked.map((entry, index) => [index + 1, entry.id, entry.entry_code, entry.nickname, entry.character_name, entry.source_game, entry.count]);
+    rows = ranking.map((position) => {
+      const entry = eligible.find((item) => item.id === position.entryId)!;
+      const profile = profiles?.find((item) => item.id === entry.owner_id);
+      return [position.rank, entry.id, entry.entry_code, profile?.nickname ?? "", entry.character_name, entry.source_game, position.votes];
+    });
   } else if (kind === "vote_details") {
     const { data } = await admin.from("votes").select("id,event_id,entry_id,voter_id,created_at").eq("event_id", event.id).order("id");
     headers = ["投票 ID", "活動 ID", "投稿 ID", "投票者 Profile ID", "投票時間"];
@@ -63,8 +74,37 @@ export async function GET(request: Request) {
       admin.from("awards").select("*").eq("event_id", event.id).order("sort_order"),
       admin.from("award_assignments").select("*"),
     ]);
-    headers = ["獎項 ID", "名稱", "說明", "類型", "順序", "啟用", "封存", "得獎投稿 ID"];
-    rows = (awards ?? []).map((award) => [award.id, award.name, award.description, award.award_type, award.sort_order, award.is_active, award.is_archived, assignments?.find((item) => item.award_id === award.id)?.submission_id]);
+    const [{ data: entries }, { data: votes }, { data: profiles }, { data: rules }] = await Promise.all([
+      admin.from("entries").select("id,owner_id,created_at,status,withdrawn_at").eq("event_id", event.id),
+      admin.from("votes").select("entry_id,created_at").eq("event_id", event.id),
+      admin.from("profiles").select("id,is_disqualified"),
+      admin.from("award_rules").select("tie_handling").eq("event_id", event.id).maybeSingle(),
+    ]);
+    const eligible = (entries ?? []).filter((entry) => (
+      entry.status === "approved"
+      && !entry.withdrawn_at
+      && !profiles?.find((profile) => profile.id === entry.owner_id)?.is_disqualified
+    ));
+    const tieHandling = isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint";
+    const ranking = calculateAwardRanking(eligible, votes ?? [], tieHandling);
+    headers = ["獎項 ID", "名稱", "說明", "類型", "指定名次", "順序", "啟用", "封存", "得獎投稿 ID"];
+    rows = (awards ?? []).flatMap((award) => {
+      const assignment = assignments?.find((item) => item.award_id === award.id);
+      const candidates = award.ranking_position
+        ? ranking.filter((item) => item.rank === award.ranking_position)
+        : [];
+      const winners = award.ranking_position
+        ? candidates.length <= 1 || tieHandling === "joint"
+          ? candidates.map((item) => item.entryId)
+          : assignment && candidates.some((item) => item.entryId === assignment.submission_id)
+            ? [assignment.submission_id]
+            : []
+        : assignment ? [assignment.submission_id] : [];
+      return (winners.length ? winners : [null]).map((winner) => [
+        award.id, award.name, award.description, award.award_type, award.ranking_position,
+        award.sort_order, award.is_active, award.is_archived, winner,
+      ]);
+    });
   } else if (kind === "audit") {
     const { data } = await admin.from("audit_logs").select("*").order("created_at", { ascending: false });
     headers = ["ID", "操作者 Discord ID", "操作者暱稱", "操作", "對象類型", "對象 ID", "結果", "失敗原因", "時間", "Request ID"];

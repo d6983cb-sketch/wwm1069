@@ -50,6 +50,7 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .setting-check input{width:19px;height:19px;accent-color:var(--jade)}
 .setting-check span{display:flex;flex-direction:column}.setting-check small{color:var(--dim)}
 .announcement-preview{min-height:90px;color:var(--dim);line-height:1.8;white-space:pre-wrap}
+.notice-badge{display:inline-flex;min-width:18px;height:18px;margin-left:5px;padding:0 5px;align-items:center;justify-content:center;border-radius:999px;background:#9f3826;color:#fff;font:11px/1 sans-serif}
 .section-link{padding:10px 0;border:0;border-top:1px solid var(--line);background:none;color:var(--gold)}
 .admin-table>div{grid-template-columns:55px 1.2fr .8fr .7fr .7fr 1.4fr}
 .admin-table span:first-of-type,.player-table span:first-child{display:flex;flex-direction:column}.admin-table small,.player-table small{color:var(--jade)}

@@ -71,11 +71,10 @@ export function isSubmissionOpen(event: EventRecord | null, now = Date.now()) {
 
 export function isVotingOpen(event: EventRecord | null, now = Date.now()) {
   if (!event) return false;
+  if (event.voting_locked || event.voting_override === "closed") return false;
   if (event.status) return event.status === "voting_open";
   if (event.voting_override === "open") return true;
-  if (event.voting_override === "closed") return false;
-  return !event.voting_locked
-    && now >= Date.parse(event.voting_starts_at)
+  return now >= Date.parse(event.voting_starts_at)
     && now <= Date.parse(event.voting_ends_at);
 }
 
@@ -84,6 +83,7 @@ export function canShowAwards(event: EventRecord | null, now = Date.now()) {
     event
     && (
       event.status === "results_published"
+      || event.status === "archived"
       || (
         !event.status
         && event.leaderboard_mode === "final"

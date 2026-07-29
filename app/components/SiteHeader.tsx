@@ -23,7 +23,7 @@ export default function SiteHeader({ nickname }: { nickname?: string | null }) {
       provider: "discord",
       options: {
         redirectTo: `${location.origin}/auth/callback?next=/`,
-        scopes: "identify guilds",
+        scopes: "identify email guilds",
       },
     });
   };

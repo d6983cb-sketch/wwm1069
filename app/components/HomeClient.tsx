@@ -75,7 +75,7 @@ export default function HomeClient({
       provider: "discord",
       options: {
         redirectTo: `${location.origin}/auth/callback?next=/`,
-        scopes: "identify guilds",
+        scopes: "identify email guilds",
       },
     });
   };

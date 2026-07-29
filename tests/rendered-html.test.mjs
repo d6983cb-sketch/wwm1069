@@ -95,6 +95,16 @@ test("mobile submission success remains on the submission page", async () => {
   assert.doesNotMatch(form, /location\.href\s*=\s*"\/\?submitted=1"/);
 });
 
+test("every Discord login requests the email required by Supabase Auth", async () => {
+  const home = await readFile(new URL("../app/components/HomeClient.tsx", import.meta.url), "utf8");
+  const header = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
+  for (const source of [home, header]) {
+    assert.match(source, /provider:\s*"discord"/);
+    assert.match(source, /scopes:\s*"identify email guilds"/);
+    assert.doesNotMatch(source, /scopes:\s*"identify guilds"/);
+  }
+});
+
 test("permanent deletion is super-admin-only and requires typed confirmation", async () => {
   const route = await readFile(
     new URL("../app/api/admin/entries/[id]/route.ts", import.meta.url),

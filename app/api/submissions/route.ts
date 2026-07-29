@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { isSubmissionOpen } from "@/lib/types";
+import { DEFAULT_SUBMISSION_IMAGE_CROP, SUBMISSION_IMAGE_ASPECT_VALUE } from "@/lib/types";
 
 const MAX_FILES = 5;
 const validPath = (userId: string, value: unknown, kind: "entry" | "original") =>
@@ -52,6 +53,22 @@ export async function POST(request: Request) {
   const characterName = String(body.characterName ?? "").trim();
   const sourceGame = String(body.sourceGame ?? "").trim();
   const description = String(body.description ?? "").trim();
+  const imageCrops = Array.isArray(body.imageCrops) ? body.imageCrops : [];
+  const normalizedCrops = entryPaths.map((_, index) => {
+    const crop = imageCrops[index] && typeof imageCrops[index] === "object" ? imageCrops[index] : {};
+    const value = crop as Record<string, unknown>;
+    const clamp = (input: unknown, minimum: number, maximum: number, fallback: number) => {
+      const number = Number(input);
+      return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback;
+    };
+    return {
+      crop_x: clamp(value.crop_x, -50, 50, DEFAULT_SUBMISSION_IMAGE_CROP.crop_x),
+      crop_y: clamp(value.crop_y, -50, 50, DEFAULT_SUBMISSION_IMAGE_CROP.crop_y),
+      zoom: clamp(value.zoom, 1, 3, DEFAULT_SUBMISSION_IMAGE_CROP.zoom),
+      rotation: clamp(value.rotation, -180, 180, DEFAULT_SUBMISSION_IMAGE_CROP.rotation),
+      aspect_ratio: SUBMISSION_IMAGE_ASPECT_VALUE,
+    };
+  });
 
   const invalid =
     entryPaths.length < 1
@@ -117,6 +134,7 @@ export async function POST(request: Request) {
       entry_id: entry.id,
       storage_path,
       position: index + 1,
+      ...normalizedCrops[index],
     })),
   );
   if (imageError) {

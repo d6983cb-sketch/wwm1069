@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { TouchEvent, useRef, useState } from "react";
+import SubmissionImage from "@/app/components/SubmissionImage";
+import type { SubmissionImageRecord } from "@/lib/types";
 
 export default function ImageCarousel({
   images,
@@ -10,14 +11,14 @@ export default function ImageCarousel({
   href,
   compact = false,
 }: {
-  images: string[];
+  images: Array<Partial<SubmissionImageRecord> & { storage_path: string }>;
   alt: string;
   href?: string;
   compact?: boolean;
 }) {
   const [active, setActive] = useState(0);
   const touchStart = useRef<number | null>(null);
-  const safeImages = images.length ? images : [""];
+  const safeImages = images;
 
   const move = (direction: number) => {
     setActive((current) => (current + direction + safeImages.length) % safeImages.length);
@@ -41,17 +42,16 @@ export default function ImageCarousel({
       <div className="carousel-track" style={{ transform: `translateX(-${active * 100}%)` }}>
         {safeImages.map((image, index) => {
           const picture = (
-            <Image
-              src={image}
+            <SubmissionImage
+              image={image}
               alt={`${alt}（${index + 1} / ${safeImages.length}）`}
-              fill
               sizes={compact ? "(max-width: 760px) 100vw, 33vw" : "(max-width: 760px) 100vw, 58vw"}
               priority={index === 0}
             />
           );
           return href
-            ? <Link href={href} className="carousel-slide" key={`${image}-${index}`} draggable={false}>{picture}</Link>
-            : <div className="carousel-slide" key={`${image}-${index}`}>{picture}</div>;
+            ? <Link href={href} className="carousel-slide" key={`${image.storage_path}-${index}`} draggable={false}>{picture}</Link>
+            : <div className="carousel-slide" key={`${image.storage_path}-${index}`}>{picture}</div>;
         })}
       </div>
       {safeImages.length > 1 && (

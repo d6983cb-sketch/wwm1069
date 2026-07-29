@@ -52,12 +52,12 @@ export default async function AdminPage() {
     : { data: [] };
   const entryIds = (rawEntries ?? []).map((entry) => entry.id);
   const { data: entryImages } = entryIds.length
-    ? await admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", entryIds).order("position")
+    ? await admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", entryIds).order("position")
     : { data: [] };
   const entries = (rawEntries ?? []).map((entry) => ({
     ...entry,
     nickname: relatedProfiles?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知",
-    images: (entryImages ?? []).filter((image) => image.entry_id === entry.id).map((image) => image.storage_path),
+    images: (entryImages ?? []).filter((image) => image.entry_id === entry.id),
   }));
   const voteRecords = (has("statistics_viewer") || has("report_viewer") ? rawVotes ?? [] : []).map((vote) => ({
     id: vote.id,

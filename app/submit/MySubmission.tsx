@@ -1,7 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import { useState } from "react";
+import ImageCropEditor from "@/app/components/ImageCropEditor";
+import SubmissionImage from "@/app/components/SubmissionImage";
+import { normalizeSubmissionImage, type SubmissionImageRecord } from "@/lib/types";
 
 type OwnEntry = {
   id: number;
@@ -13,14 +15,25 @@ type OwnEntry = {
   original_image_path: string | null;
   withdrawn_at: string | null;
   status: string;
-  images: Array<{ storage_path: string; position: number }>;
+  images: SubmissionImageRecord[];
 };
 
-export default function MySubmission({ entry, eventStatus }: { entry: OwnEntry; eventStatus?: string | null }) {
+export default function MySubmission({
+  entry,
+  eventStatus,
+  canEditCrop,
+}: {
+  entry: OwnEntry;
+  eventStatus?: string | null;
+  canEditCrop: boolean;
+}) {
   const [withdrawn, setWithdrawn] = useState(Boolean(entry.withdrawn_at));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [editingImages, setEditingImages] = useState(false);
+  const [images, setImages] = useState(entry.images.map(normalizeSubmissionImage));
   const canChange = eventStatus === "submission_open";
+  const cropEditable = canEditCrop && !withdrawn;
 
   const change = async () => {
     const action = withdrawn ? "restore" : "withdraw";
@@ -42,6 +55,32 @@ export default function MySubmission({ entry, eventStatus }: { entry: OwnEntry; 
     }
   };
 
+  const saveCrops = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/submissions/images/crop", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
+        body: JSON.stringify({
+          entryId: entry.id,
+          images: images.map(({ id, crop_x, crop_y, zoom, rotation }) => ({
+            imageId: id,
+            cropX: crop_x,
+            cropY: crop_y,
+            zoom,
+            rotation,
+          })),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(body.message ?? (response.ok ? "圖片展示位置已儲存。" : "圖片位置儲存失敗。"));
+      if (response.ok) setEditingImages(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="own-submission">
       <header>
@@ -51,9 +90,23 @@ export default function MySubmission({ entry, eventStatus }: { entry: OwnEntry; 
       </header>
       <div className="own-submission-images">
         {entry.images.map((image, index) => (
-          <Image key={image.storage_path} src={image.storage_path} alt={`投稿預覽 ${index + 1}`} width={260} height={260} />
+          <SubmissionImage key={image.id} image={images[index] ?? image} alt={`投稿預覽 ${index + 1}`} />
         ))}
       </div>
+      {editingImages && (
+        <>
+          <ImageCropEditor images={images} onChange={(next) => setImages(
+            next.map((image) => ({ ...image, id: image.id! })),
+          )} disabled={busy} />
+          <div className="crop-save-actions">
+            <button type="button" className="primary" disabled={busy} onClick={saveCrops}>{busy ? "儲存中…" : "儲存全部圖片位置"}</button>
+            <button type="button" disabled={busy} onClick={() => {
+              setImages(entry.images.map(normalizeSubmissionImage));
+              setEditingImages(false);
+            }}>取消</button>
+          </div>
+        </>
+      )}
       <dl>
         <div><dt>公開圖片</dt><dd>{entry.images.length} 張</dd></div>
         <div><dt>查核原圖</dt><dd>{entry.original_image_path ? "已上傳（僅管理員可見）" : "不需要"}</dd></div>
@@ -61,13 +114,15 @@ export default function MySubmission({ entry, eventStatus }: { entry: OwnEntry; 
         <div><dt>顯示模式</dt><dd>依活動匿名／實名設定</dd></div>
       </dl>
       {canChange && (
-        <button type="button" className={withdrawn ? "" : "danger"} disabled={busy} onClick={change}>
-          {busy ? "處理中…" : withdrawn ? "復原投稿" : "撤回整筆投稿"}
-        </button>
+        <div className="own-submission-actions">
+          {cropEditable && <button type="button" disabled={busy} onClick={() => setEditingImages((current) => !current)}>{editingImages ? "關閉圖片編輯" : "編輯圖片位置"}</button>}
+          <button type="button" className={withdrawn ? "" : "danger"} disabled={busy} onClick={change}>
+            {busy ? "處理中…" : withdrawn ? "復原投稿" : "撤回整筆投稿"}
+          </button>
+        </div>
       )}
       {!canChange && <p className="muted">投稿截止或投票開始後不可撤回。</p>}
       {message && <p className="form-error">{message}</p>}
     </section>
   );
 }
-

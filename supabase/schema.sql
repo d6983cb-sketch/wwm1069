@@ -21,6 +21,7 @@ create table public.events (
   voting_ends_at timestamptz not null,
   submissions_locked boolean not null default false,
   voting_locked boolean not null default false,
+  allow_admin_crop_after_submission boolean not null default false,
   voting_override text not null default 'auto'
     check (voting_override in ('auto', 'open', 'closed')),
   leaderboard_mode text not null default 'hidden'
@@ -49,6 +50,12 @@ create table public.entry_images (
   entry_id bigint not null references public.entries(id) on delete cascade,
   storage_path text not null,
   position smallint not null check (position between 1 and 5),
+  crop_x double precision not null default 0 check (crop_x between -50 and 50),
+  crop_y double precision not null default 0 check (crop_y between -50 and 50),
+  zoom double precision not null default 1 check (zoom between 1 and 3),
+  rotation double precision not null default 0 check (rotation between -180 and 180),
+  aspect_ratio text not null default '4/5' check (aspect_ratio = '4/5'),
+  crop_updated_at timestamptz,
   created_at timestamptz not null default now(),
   unique (entry_id, position)
 );

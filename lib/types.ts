@@ -13,6 +13,7 @@ export type EventRecord = {
   submission_identity_mode?: IdentityMode;
   voting_identity_mode?: IdentityMode;
   reveal_authors_after_results?: boolean;
+  allow_admin_crop_after_submission?: boolean;
 };
 
 export type EventStatus =
@@ -35,9 +36,51 @@ export type EntryRecord = {
   uses_ai_background: boolean;
   created_at: string;
   nickname: string;
-  images: string[];
+  images: SubmissionImageRecord[];
   vote_count: number;
 };
+
+export const SUBMISSION_IMAGE_ASPECT_RATIO = 4 / 5;
+export const SUBMISSION_IMAGE_ASPECT_VALUE = "4/5";
+
+export type SubmissionImageCrop = {
+  crop_x: number;
+  crop_y: number;
+  zoom: number;
+  rotation: number;
+  aspect_ratio: string;
+};
+
+export type SubmissionImageRecord = SubmissionImageCrop & {
+  id: number;
+  storage_path: string;
+  position: number;
+};
+
+export const DEFAULT_SUBMISSION_IMAGE_CROP: SubmissionImageCrop = {
+  crop_x: 0,
+  crop_y: 0,
+  zoom: 1,
+  rotation: 0,
+  aspect_ratio: SUBMISSION_IMAGE_ASPECT_VALUE,
+};
+
+export function normalizeSubmissionImage<T extends Partial<SubmissionImageRecord> & { storage_path: string }>(
+  image: T,
+): T & SubmissionImageCrop {
+  const clamp = (value: unknown, minimum: number, maximum: number, fallback: number) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback;
+  };
+  return {
+    ...image,
+    crop_x: clamp(image.crop_x, -50, 50, 0),
+    crop_y: clamp(image.crop_y, -50, 50, 0),
+    zoom: clamp(image.zoom, 1, 3, 1),
+    rotation: clamp(image.rotation, -180, 180, 0),
+    aspect_ratio: SUBMISSION_IMAGE_ASPECT_VALUE,
+  };
+}
 
 export function eventPhase(event: EventRecord | null) {
   if (!event) return "尚未建立活動";

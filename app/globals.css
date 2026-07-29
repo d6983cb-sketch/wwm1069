@@ -65,6 +65,48 @@ button:disabled{cursor:not-allowed;opacity:.45}
 @media(max-width:760px){.top nav a{min-width:0;flex:1;padding:13px 5px}.hero-actions>a{padding:0 12px}.admin{display:block}.admin>aside{display:flex;position:sticky;top:0;z-index:8;padding:10px 14px;overflow-x:auto;flex-direction:row;border-right:0;border-bottom:1px solid var(--line)}.admin>aside>b{display:none}.admin>aside button{flex:0 0 auto;border-left:0;border-bottom:2px solid transparent;white-space:nowrap}.admin>aside button.on{border-bottom-color:var(--jade)}.admin-content{padding:30px 18px}.event-form{grid-template-columns:1fr}.event-form label:first-child,.event-form button{grid-column:auto}.announcement-layout{grid-template-columns:1fr}.admin-heading{align-items:flex-start;gap:14px;flex-direction:column}.admin-heading h1{font-size:32px}.csv-actions{justify-content:flex-start}.compact-table>div{min-width:650px}.player-table>div{min-width:680px}}
 @media(max-width:760px){.upload-previews{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* Unified 4:5 submission image system. Crop metadata changes presentation only. */
+.submission-image{position:relative;display:block;width:100%;aspect-ratio:4/5;overflow:hidden;background:#171d19}
+.submission-image img{width:100%;height:100%;object-fit:cover;transition:filter .35s ease;transform-origin:center}
+.photo{aspect-ratio:4/5}
+.photo .submission-image,.carousel-slide>.submission-image{height:100%;aspect-ratio:auto}
+.card:hover .photo img{filter:saturate(.9)}
+.detail{min-height:0;align-items:start}
+.detail>div{aspect-ratio:4/5}
+.detail>div img{object-position:initial}
+.winner>a{aspect-ratio:4/5}
+.winner>a>.submission-image{height:100%}
+.own-submission-images .submission-image{border:1px solid var(--line)}
+.custom-awards article>a>.submission-image{flex:0 0 90px;width:90px}
+.admin-entry-preview>.submission-image{height:100%;aspect-ratio:1}
+.upload-previews figure>.submission-image{aspect-ratio:4/5}
+.upload-previews figure>.submission-image img{position:absolute;inset:0}
+
+.crop-editor{margin-top:20px;padding:16px;border:1px solid var(--line);background:#0b100d;text-align:left}
+.crop-tabs{display:flex;gap:7px;margin-bottom:12px;overflow-x:auto}
+.crop-tabs button,.crop-actions button,.crop-save-actions button{padding:9px 13px;border:1px solid var(--line);background:#101713;color:var(--gold)}
+.crop-tabs button.on{border-color:var(--gold);background:#3f584b}
+.crop-stage{position:relative;width:min(100%,520px);margin:auto;aspect-ratio:4/5;overflow:hidden;border:1px solid var(--gold);touch-action:none;cursor:grab;user-select:none}
+.crop-stage:active{cursor:grabbing}
+.crop-stage>.submission-image{height:100%}
+.crop-grid,.crop-safe-area{position:absolute;z-index:3;inset:0;pointer-events:none}
+.crop-grid{background:linear-gradient(90deg,transparent 33.1%,rgba(255,255,255,.5) 33.2%,rgba(255,255,255,.5) 33.5%,transparent 33.6%,transparent 66.4%,rgba(255,255,255,.5) 66.5%,rgba(255,255,255,.5) 66.8%,transparent 66.9%),linear-gradient(0deg,transparent 33.1%,rgba(255,255,255,.5) 33.2%,rgba(255,255,255,.5) 33.5%,transparent 33.6%,transparent 66.4%,rgba(255,255,255,.5) 66.5%,rgba(255,255,255,.5) 66.8%,transparent 66.9%)}
+.crop-safe-area{inset:10%;border:2px dashed rgba(218,192,133,.9)}
+.crop-safe-area small{position:absolute;left:6px;top:6px;padding:3px 6px;background:#080b09bf;color:var(--gold)}
+.crop-controls{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+.crop-controls label{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;color:var(--gold)}
+.crop-controls input{width:100%;accent-color:var(--jade)}
+.crop-actions,.crop-save-actions,.own-submission-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:14px}
+.crop-actions label{display:flex;align-items:center;gap:6px}
+.crop-modal{width:min(720px,100%);max-height:94vh;overflow:auto}
+.crop-modal .crop-stage{width:min(100%,430px)}
+
+@media(max-width:760px){
+  .detail>div{min-height:0;aspect-ratio:4/5}
+  .crop-controls{grid-template-columns:1fr}
+  .crop-modal{padding:30px 16px}
+}
+
 /* Swipeable entry galleries */
 .image-carousel{position:relative;width:100%;height:100%;overflow:hidden;background:#171d19;touch-action:pan-y}
 .carousel-track{display:flex;width:100%;height:100%;transition:transform .32s ease}

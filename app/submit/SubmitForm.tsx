@@ -2,7 +2,12 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/browser";
-import type { EventRecord } from "@/lib/types";
+import ImageCropEditor from "@/app/components/ImageCropEditor";
+import {
+  DEFAULT_SUBMISSION_IMAGE_CROP,
+  type EventRecord,
+  type SubmissionImageCrop,
+} from "@/lib/types";
 
 const MAX_FILES = 5;
 const MAX_SOURCE_FILE_BYTES = 30 * 1024 * 1024;
@@ -164,6 +169,7 @@ function friendlyError(error: unknown) {
 export default function SubmitForm({ event, userId }: { event: EventRecord; userId: string }) {
   const [ai, setAi] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  const [imageCrops, setImageCrops] = useState<SubmissionImageCrop[]>([]);
   const [original, setOriginal] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -204,6 +210,10 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       const compressedValidation = validateCompressedFiles(next);
       if (compressedValidation) return setMessage(compressedValidation);
       setFiles(next);
+      setImageCrops((current) => [
+        ...current,
+        ...compressed.map(() => ({ ...DEFAULT_SUBMISSION_IMAGE_CROP })),
+      ]);
       const saved = unique.reduce((total, file, index) => total + Math.max(0, file.size - compressed[index].size), 0);
       setMessage(
         selected.length > availableSlots
@@ -226,10 +236,23 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       next.splice(to, 0, moved);
       return next;
     });
+    setImageCrops((current) => {
+      if (to < 0 || to >= current.length) return current;
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
   };
 
   const setCover = (index: number) => {
     setFiles((current) => {
+      const next = [...current];
+      const [cover] = next.splice(index, 1);
+      next.unshift(cover);
+      return next;
+    });
+    setImageCrops((current) => {
       const next = [...current];
       const [cover] = next.splice(index, 1);
       next.unshift(cover);
@@ -305,6 +328,7 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
           usesAiBackground: ai,
           originalPath: uploadedOriginalPath,
           imagePaths: uploadedPaths,
+          imageCrops,
         }),
       });
       const body = await response.json();
@@ -357,34 +381,60 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
             <small>{files.length >= MAX_FILES ? "已達 5 張上限" : "JPG、PNG、WEBP；單張原檔最多 30 MB"}</small>
           </label>
           {previews.length > 0 && (
-            <div className="upload-previews" aria-label="已選擇的作品照片">
-              {previews.map((preview, index) => (
-                <figure key={preview.url} className={index === 0 ? "is-cover" : ""}>
-                  <img src={preview.url} alt={`作品照片預覽 ${index + 1}`} />
-                  <figcaption>
-                    <strong>{index === 0 ? "封面" : `第 ${index + 1} 張`} · {formatFileSize(preview.file.size)}</strong>
-                    <span className="preview-actions">
-                      {index > 0 && (
-                        <button type="button" disabled={disabled} onClick={() => setCover(index)}>
-                          設為封面
-                        </button>
-                      )}
-                      <button type="button" disabled={disabled || index === 0}
-                        aria-label={`將第 ${index + 1} 張照片往前移`}
-                        onClick={() => moveFile(index, index - 1)}>←</button>
-                      <button type="button" disabled={disabled || index === files.length - 1}
-                        aria-label={`將第 ${index + 1} 張照片往後移`}
-                        onClick={() => moveFile(index, index + 1)}>→</button>
-                      <button type="button" className="remove" disabled={disabled}
-                        aria-label={`移除第 ${index + 1} 張照片`}
-                        onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
-                        移除
-                      </button>
+            <>
+              <div className="upload-previews" aria-label="已選擇的作品照片">
+                {previews.map((preview, index) => (
+                  <figure key={preview.url} className={index === 0 ? "is-cover" : ""}>
+                    <span className="submission-image">
+                      {/* Blob preview intentionally uses a native image; next/image cannot optimize local object URLs. */}
+                      <img
+                        src={preview.url}
+                        alt={`作品照片預覽 ${index + 1}`}
+                        style={{
+                          objectPosition: `${50 + (imageCrops[index]?.crop_x ?? 0)}% ${50 + (imageCrops[index]?.crop_y ?? 0)}%`,
+                          transform: `scale(${imageCrops[index]?.zoom ?? 1}) rotate(${imageCrops[index]?.rotation ?? 0}deg)`,
+                        }}
+                      />
                     </span>
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
+                    <figcaption>
+                      <strong>{index === 0 ? "封面" : `第 ${index + 1} 張`} · {formatFileSize(preview.file.size)}</strong>
+                      <span className="preview-actions">
+                        {index > 0 && (
+                          <button type="button" disabled={disabled} onClick={() => setCover(index)}>
+                            設為封面
+                          </button>
+                        )}
+                        <button type="button" disabled={disabled || index === 0}
+                          aria-label={`將第 ${index + 1} 張照片往前移`}
+                          onClick={() => moveFile(index, index - 1)}>←</button>
+                        <button type="button" disabled={disabled || index === files.length - 1}
+                          aria-label={`將第 ${index + 1} 張照片往後移`}
+                          onClick={() => moveFile(index, index + 1)}>→</button>
+                        <button type="button" className="remove" disabled={disabled}
+                          aria-label={`移除第 ${index + 1} 張照片`}
+                          onClick={() => {
+                            setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                            setImageCrops((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                          }}>
+                          移除
+                        </button>
+                      </span>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+              <ImageCropEditor
+                images={previews.map((preview, index) => ({
+                  storage_path: preview.url,
+                  position: index + 1,
+                  ...imageCrops[index],
+                }))}
+                disabled={disabled}
+                onChange={(next) => setImageCrops(next.map(({ crop_x, crop_y, zoom, rotation, aspect_ratio }) => ({
+                  crop_x, crop_y, zoom, rotation, aspect_ratio,
+                })))}
+              />
+            </>
           )}
         </div>
       </section>

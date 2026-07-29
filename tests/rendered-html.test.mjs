@@ -56,3 +56,34 @@ test("submission failure cleanup checks database references before deleting stor
   assert.match(source, /\.from\("entry_images"\)[\s\S]*\.in\("storage_path", publicUrls\)/);
   assert.match(source, /\.from\("entries"\)[\s\S]*\.eq\("original_image_path", originalPath\)/);
 });
+
+test("image crop migration is presentation-only and preserves canonical data", async () => {
+  const migration = await readFile(
+    new URL("../supabase/migrations/20260729193000_submission_image_crops.sql", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(migration, /^\s*(?:delete\s+from|update|truncate|drop\s+table)\s+public\.(?:entries|votes|profiles|entry_images)\b/im);
+  assert.doesNotMatch(migration, /storage\.objects\s+(?:set|delete|update)/i);
+  assert.match(migration, /add column if not exists crop_x/i);
+  assert.match(migration, /revoke update on table public\.entry_images from anon, authenticated/i);
+});
+
+test("all public submission images use the shared crop-aware component", async () => {
+  const carousel = await readFile(new URL("../app/components/ImageCarousel.tsx", import.meta.url), "utf8");
+  const awards = await readFile(new URL("../app/awards/page.tsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(carousel, /SubmissionImage/);
+  assert.match(awards, /SubmissionImage/);
+  assert.match(css, /\.submission-image\{[^}]*aspect-ratio:4\/5/);
+});
+
+test("crop API limits updates to crop columns and records an audit log", async () => {
+  const source = await readFile(
+    new URL("../app/api/submissions/images/crop/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /submission_image_crop_update/);
+  assert.match(source, /allow_admin_crop_after_submission/);
+  assert.doesNotMatch(source, /\.from\("votes"\)\.(?:update|delete|insert)/);
+  assert.doesNotMatch(source, /storage\.(?:from|remove|upload)/);
+});

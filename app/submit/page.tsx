@@ -25,7 +25,7 @@ export default async function SubmitPage() {
     ? await admin.from("entries").select("id,entry_code,character_name,source_game,created_at,uses_ai_background,original_image_path,withdrawn_at,status").eq("event_id", event.id).eq("owner_id", user.id).maybeSingle()
     : { data: null };
   const { data: ownImages } = existingEntry
-    ? await admin.from("entry_images").select("storage_path,position").eq("entry_id", existingEntry.id).order("position")
+    ? await admin.from("entry_images").select("id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").eq("entry_id", existingEntry.id).order("position")
     : { data: [] };
   return <>
     <SiteHeader nickname={profile.nickname} />
@@ -34,7 +34,7 @@ export default async function SubmitPage() {
       {profile.is_disqualified
         ? <div className="empty-state"><i>止</i><h3>目前無法投稿</h3><p>此帳號目前已被取消活動資格。</p></div>
         : existingEntry
-          ? <MySubmission entry={{ ...existingEntry, images: ownImages ?? [] }} eventStatus={event?.status} />
+          ? <MySubmission entry={{ ...existingEntry, images: ownImages ?? [] }} canEditCrop={Boolean(event && isSubmissionOpen(event))} eventStatus={event?.status} />
           : event && isSubmissionOpen(event)
         ? <SubmitForm event={event} userId={user.id} />
         : <div className="empty-state"><i>止</i><h3>目前未開放投稿</h3><p>請留意首頁公告與活動時間。</p></div>}

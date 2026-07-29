@@ -1,10 +1,10 @@
 import SiteHeader from "@/app/components/SiteHeader";
 import SiteFooter from "@/app/components/SiteFooter";
-import Image from "next/image";
 import Link from "next/link";
+import SubmissionImage from "@/app/components/SubmissionImage";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { canShowAwards } from "@/lib/types";
+import { canShowAwards, type SubmissionImageRecord } from "@/lib/types";
 import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ type ResultEntry = {
   source_game: string;
   created_at: string;
   nickname: string;
-  image: string;
+  image: SubmissionImageRecord | null;
   votes: number;
   rank: number;
 };
@@ -59,7 +59,7 @@ export default async function AwardsPage() {
       { data: exclusions },
     ] = await Promise.all([
       ids.length ? admin.from("votes").select("entry_id,created_at").in("entry_id", ids) : Promise.resolve({ data: [] }),
-      ids.length ? admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", ids).eq("position", 1) : Promise.resolve({ data: [] }),
+      ids.length ? admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", ids).eq("position", 1) : Promise.resolve({ data: [] }),
       ownerIds.length ? admin.from("profiles").select("id,nickname,is_disqualified").in("id", ownerIds) : Promise.resolve({ data: [] }),
       admin.from("award_rules").select("*").eq("event_id", event.id).maybeSingle(),
       admin.from("awards").select("*").eq("event_id", event.id).eq("is_archived", false).order("sort_order"),
@@ -72,7 +72,7 @@ export default async function AwardsPage() {
     ).map((entry) => ({
       ...entry,
       nickname: owners?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知玩家",
-      image: images?.find((image) => image.entry_id === entry.id)?.storage_path ?? "",
+      image: images?.find((image) => image.entry_id === entry.id) ?? null,
       votes: 0,
       rank: 0,
     }));
@@ -161,7 +161,7 @@ export default async function AwardsPage() {
               <article className={entry.rank === 1 ? "winner first" : "winner"} key={entry.id}>
                 <span>{["壹", "貳", "參"][entry.rank - 1]}</span>
                 <Link href={`/entry/${entry.id}`}>
-                  {entry.image && <Image src={entry.image} alt={entry.character_name} fill sizes="(max-width: 760px) 100vw, 33vw" />}
+                  {entry.image && <SubmissionImage image={entry.image} alt={entry.character_name} />}
                 </Link>
                 <div>
                   <small>第 {entry.rank} 名 · {entry.entry_code ?? `#${entry.id}`}</small>
@@ -182,7 +182,7 @@ export default async function AwardsPage() {
               <div><h3>{award.name}</h3><p>{award.description || "未填寫獎項說明。"}</p></div>
               {published && award.winners.length ? award.winners.map((winner) => (
                 <Link href={`/entry/${winner.id}`} key={winner.id}>
-                  {winner.image && <Image src={winner.image} alt={winner.character_name} width={120} height={120} />}
+                  {winner.image && <SubmissionImage image={winner.image} alt={winner.character_name} />}
                   <span><b>{winner.entry_code ?? `#${winner.id}`} · {winner.character_name}</b><small>{showAuthors ? winner.nickname : "匿名參賽者"}</small></span>
                 </Link>
               )) : <strong>{published && award.unresolvedTie ? "同票，尚待依規則決定" : "尚未公布"}</strong>}

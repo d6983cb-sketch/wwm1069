@@ -272,6 +272,7 @@ export async function POST(request: Request) {
         "submission_identity_mode",
         "voting_identity_mode",
         "reveal_authors_after_results",
+        "allow_admin_crop_after_submission",
       ];
       const changes = Object.fromEntries(
         Object.entries((body.changes ?? {}) as JsonObject).filter(([key]) => allowed.includes(key)),
@@ -660,6 +661,7 @@ export async function POST(request: Request) {
           "voting_ends_at", "submissions_locked", "voting_locked", "voting_override",
           "leaderboard_mode", "status", "submission_identity_mode",
           "voting_identity_mode", "reveal_authors_after_results",
+          "allow_admin_crop_after_submission",
         ];
         await admin.from("events").update(Object.fromEntries(Object.entries(before).filter(([key]) => allowedEventRestore.includes(key)))).eq("id", String(source.target_id));
       } else if (source.action_type === "announcement_publish" && after?.id) {

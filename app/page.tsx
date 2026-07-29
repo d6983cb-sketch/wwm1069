@@ -4,7 +4,7 @@ import SiteFooter from "@/app/components/SiteFooter";
 import SiteHeader from "@/app/components/SiteHeader";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import type { EntryRecord, EventRecord } from "@/lib/types";
+import { normalizeSubmissionImage, type EntryRecord, type EventRecord } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +23,7 @@ export default async function HomePage() {
   const shouldExposeCounts = event?.leaderboard_mode !== "hidden";
   const [{ data: profiles }, { data: images }, { data: allVotes }, { data: announcement }, { data: ownVotes }] = await Promise.all([
     ownerIds.length ? admin.from("profiles").select("id,nickname,is_disqualified").in("id", ownerIds) : Promise.resolve({ data: [] }),
-    entryIds.length ? admin.from("entry_images").select("entry_id,storage_path,position").in("entry_id", entryIds).order("position") : Promise.resolve({ data: [] }),
+    entryIds.length ? admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", entryIds).order("position") : Promise.resolve({ data: [] }),
     shouldExposeCounts && entryIds.length
       ? admin.from("votes").select("entry_id").in("entry_id", entryIds)
       : Promise.resolve({ data: [] }),
@@ -50,7 +50,7 @@ export default async function HomePage() {
     nickname: showAuthors
       ? profiles?.find((item) => item.id === entry.owner_id)?.nickname ?? "未知玩家"
       : "匿名參賽者",
-    images: (images ?? []).filter((item) => item.entry_id === entry.id).map((item) => item.storage_path),
+    images: (images ?? []).filter((item) => item.entry_id === entry.id).map(normalizeSubmissionImage),
     vote_count: (allVotes ?? []).filter((vote) => vote.entry_id === entry.id).length,
   })).filter((entry) => entry.images.length > 0);
   for (let index = entries.length - 1; index > 0; index -= 1) {

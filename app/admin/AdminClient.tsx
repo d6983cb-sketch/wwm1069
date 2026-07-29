@@ -1,8 +1,9 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
-import type { EventRecord } from "@/lib/types";
+import ImageCropEditor from "@/app/components/ImageCropEditor";
+import SubmissionImage from "@/app/components/SubmissionImage";
+import { normalizeSubmissionImage, type EventRecord, type SubmissionImageRecord } from "@/lib/types";
 import type { AdminPermissions } from "@/lib/admin-access";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 
@@ -19,7 +20,7 @@ type PendingEntry = {
   original_image_path: string | null;
   status: string;
   withdrawn_at: string | null;
-  images: string[];
+  images: SubmissionImageRecord[];
 };
 type AdminPlayer = {
   id: string;
@@ -146,6 +147,8 @@ export default function AdminClient({
   const [editingPlayer, setEditingPlayer] = useState<AdminPlayer | null>(null);
   const [selectedAwardEntry, setSelectedAwardEntry] = useState<Record<string, string>>({});
   const [selectedAwardRank, setSelectedAwardRank] = useState<Record<string, string>>({});
+  const [editingCropEntry, setEditingCropEntry] = useState<PendingEntry | null>(null);
+  const [adminCropImages, setAdminCropImages] = useState<SubmissionImageRecord[]>([]);
   const can = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
   const visibleTabs = useMemo(() => tabs.filter((tab) => {
     const allowed = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
@@ -250,8 +253,57 @@ export default function AdminClient({
         submission_identity_mode: form.get("submission_identity_mode"),
         voting_identity_mode: form.get("voting_identity_mode"),
         reveal_authors_after_results: form.get("reveal_authors_after_results") === "on",
+        allow_admin_crop_after_submission: form.get("allow_admin_crop_after_submission") === "on",
       },
     });
+  };
+
+  const openCropEditor = (entry: PendingEntry) => {
+    setEditingCropEntry(entry);
+    setAdminCropImages(entry.images.map(normalizeSubmissionImage));
+    setMessage("");
+  };
+
+  const saveAdminCrops = async () => {
+    if (!editingCropEntry) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/submissions/images/crop", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
+        body: JSON.stringify({
+          entryId: editingCropEntry.id,
+          images: adminCropImages.map(({ id, crop_x, crop_y, zoom, rotation }) => ({
+            imageId: id, cropX: crop_x, cropY: crop_y, zoom, rotation,
+          })),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(body.message ?? (response.ok ? "圖片展示位置已儲存。" : "圖片位置儲存失敗。"));
+      if (response.ok) {
+        setEditingCropEntry(null);
+        setTimeout(() => location.reload(), 500);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const regenerateDisplay = async (entry: PendingEntry) => {
+    if (!confirm(`重新產生作品 ${entry.entry_code ?? `#${entry.id}`} 的展示快取？原圖、投稿與票數都不會改變。`)) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/submissions/images/crop", {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
+        body: JSON.stringify({ entryId: entry.id }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(body.message ?? (response.ok ? "展示快取已重新產生。" : "操作失敗。"));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const announce = async (formEvent: FormEvent<HTMLFormElement>) => {
@@ -406,7 +458,7 @@ export default function AdminClient({
                 <div key={entry.id}>
                   <b>{entry.entry_code ?? `#${entry.id}`}</b>
                   <a className="admin-entry-preview" href={`/entry/${entry.id}`} target="_blank">
-                    {entry.images[0] ? <Image src={entry.images[0]} alt={`${entry.character_name} 作品預覽`} width={60} height={60} /> : <span>無照片</span>}
+                    {entry.images[0] ? <SubmissionImage image={entry.images[0]} alt={`${entry.character_name} 作品預覽`} /> : <span>無照片</span>}
                   </a>
                   <span><b>{entry.character_name}</b><small>{entry.source_game}</small></span>
                   <span>{entry.nickname}</span>
@@ -414,6 +466,8 @@ export default function AdminClient({
                   <span>{entry.original_image_path ? <a target="_blank" href={`/api/admin/original/${entry.id}`}>查看原圖</a> : "無原圖"}</span>
                   <span className="row-actions">
                     <a href={`/entry/${entry.id}`} target="_blank">查看作品</a>
+                    {can("submission_manager") && <button disabled={busy} onClick={() => openCropEditor(entry)}>編輯圖片</button>}
+                    {can("submission_manager") && <button disabled={busy} onClick={() => regenerateDisplay(entry)}>重新生成展示圖</button>}
                     {can("submission_manager") && <button className="danger" disabled={busy} onClick={() => confirm(`確定取消作品 ${entry.entry_code ?? `#${entry.id}`} 的參賽資格？投稿、圖片與投票都會保留。`) && action({ type: "entry_status", entryId: entry.id, status: "disqualified" })}>取消資格</button>}
                     {can("submission_manager") && entry.status !== "approved" && <button disabled={busy} onClick={() => confirm(`確定恢復作品 ${entry.entry_code ?? `#${entry.id}`} 的公開狀態？`) && action({ type: "entry_status", entryId: entry.id, status: "approved" })}>恢復展示</button>}
                     {can("submission_manager") && entry.withdrawn_at && <button disabled={busy} onClick={() => (
@@ -520,6 +574,7 @@ export default function AdminClient({
               </label>
               <label className="setting-check"><input name="submissions_locked" type="checkbox" defaultChecked={event.submissions_locked} /><span><b>鎖定投稿</b><small>停止接受新投稿</small></span></label>
               <label className="setting-check"><input name="voting_locked" type="checkbox" defaultChecked={event.voting_locked} /><span><b>鎖定投票</b><small>即使狀態為投票開放，也停止投票與取消投票</small></span></label>
+              <label className="setting-check"><input name="allow_admin_crop_after_submission" type="checkbox" defaultChecked={event.allow_admin_crop_after_submission === true} /><span><b>投稿截止後允許管理員調整圖片</b><small>只修改展示位置，不更換或覆蓋圖片</small></span></label>
               <button className="primary" disabled={busy}>儲存活動設定</button>
             </form>
           </>
@@ -753,6 +808,21 @@ export default function AdminClient({
 
         {message && <div className="toast">{message}</div>}
       </section>
+      {editingCropEntry && <div className="backdrop" onMouseDown={(event) => event.currentTarget === event.target && !busy && setEditingCropEntry(null)}>
+        <section className="modal crop-modal">
+          <button className="close" type="button" disabled={busy} onClick={() => setEditingCropEntry(null)}>×</button>
+          <small>作品 {editingCropEntry.entry_code ?? `#${editingCropEntry.id}`}</small>
+          <h2>編輯圖片展示位置</h2>
+          <p>每張圖片獨立設定；原圖、圖片網址、投稿內容與票數不會改變。</p>
+          <ImageCropEditor images={adminCropImages} onChange={(next) => setAdminCropImages(
+            next.map((image) => ({ ...image, id: image.id! })),
+          )} disabled={busy} />
+          <div className="crop-save-actions">
+            <button type="button" className="primary" disabled={busy} onClick={saveAdminCrops}>{busy ? "儲存中…" : "儲存全部圖片位置"}</button>
+            <button type="button" disabled={busy} onClick={() => setEditingCropEntry(null)}>取消</button>
+          </div>
+        </section>
+      </div>}
       {editingPlayer && <div className="backdrop" onMouseDown={(e) => e.currentTarget === e.target && !busy && setEditingPlayer(null)}>
         <section className="modal">
           <button className="close" type="button" disabled={busy} onClick={() => setEditingPlayer(null)}>×</button>

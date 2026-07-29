@@ -74,7 +74,8 @@ test("all public submission images use the shared crop-aware component", async (
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(carousel, /SubmissionImage/);
   assert.match(awards, /SubmissionImage/);
-  assert.match(css, /\.submission-image\{[^}]*aspect-ratio:4\/5/);
+  assert.match(css, /--submission-image-ratio:4\/3/);
+  assert.match(css, /\.submission-image\{[^}]*aspect-ratio:var\(--submission-image-ratio\)/);
 });
 
 test("crop API limits updates to crop columns and records an audit log", async () => {

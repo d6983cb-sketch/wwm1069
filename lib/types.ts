@@ -40,8 +40,8 @@ export type EntryRecord = {
   vote_count: number;
 };
 
-export const SUBMISSION_IMAGE_ASPECT_RATIO = 4 / 5;
-export const SUBMISSION_IMAGE_ASPECT_VALUE = "4/5";
+export const SUBMISSION_IMAGE_ASPECT_RATIO = 4 / 3;
+export const SUBMISSION_IMAGE_ASPECT_VALUE = "4/3";
 
 export type SubmissionImageCrop = {
   crop_x: number;

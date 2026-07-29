@@ -54,7 +54,7 @@ create table public.entry_images (
   crop_y double precision not null default 0 check (crop_y between -50 and 50),
   zoom double precision not null default 1 check (zoom between 1 and 3),
   rotation double precision not null default 0 check (rotation between -180 and 180),
-  aspect_ratio text not null default '4/5' check (aspect_ratio = '4/5'),
+  aspect_ratio text not null default '4/3' check (aspect_ratio = '4/3'),
   crop_updated_at timestamptz,
   created_at timestamptz not null default now(),
   unique (entry_id, position)

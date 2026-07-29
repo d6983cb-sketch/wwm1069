@@ -88,3 +88,27 @@ test("crop API limits updates to crop columns and records an audit log", async (
   assert.doesNotMatch(source, /\.from\("votes"\)\.(?:update|delete|insert)/);
   assert.doesNotMatch(source, /storage\.(?:from|remove|upload)/);
 });
+
+test("mobile submission success remains on the submission page", async () => {
+  const form = await readFile(new URL("../app/submit/SubmitForm.tsx", import.meta.url), "utf8");
+  assert.match(form, /router\.replace\("\/submit\?submitted=1"\)/);
+  assert.doesNotMatch(form, /location\.href\s*=\s*"\/\?submitted=1"/);
+});
+
+test("permanent deletion is super-admin-only and requires typed confirmation", async () => {
+  const route = await readFile(
+    new URL("../app/api/admin/entries/[id]/route.ts", import.meta.url),
+    "utf8",
+  );
+  const migration = await readFile(
+    new URL("../supabase/migrations/20260729203000_admin_permanent_entry_delete.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /authorizeAdmin\(request,\s*undefined,\s*true\)/);
+  assert.match(route, /body\?\.confirmation !== `永久刪除 \$\{entryLabel\}`/);
+  assert.match(route, /admin\.storage\.from\("cos-entries"\)\.remove/);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke all on function public\.admin_permanently_delete_entry\(bigint\) from authenticated/i);
+  assert.match(migration, /delete from public\.votes[\s\S]*delete from public\.vote_history[\s\S]*delete from public\.entry_images[\s\S]*delete from public\.entries/i);
+  assert.doesNotMatch(migration, /delete from storage\.objects/i);
+});

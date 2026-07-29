@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/browser";
 import ImageCropEditor from "@/app/components/ImageCropEditor";
 import {
@@ -167,6 +168,7 @@ function friendlyError(error: unknown) {
 }
 
 export default function SubmitForm({ event, userId }: { event: EventRecord; userId: string }) {
+  const router = useRouter();
   const [ai, setAi] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [imageCrops, setImageCrops] = useState<SubmissionImageCrop[]>([]);
@@ -334,8 +336,8 @@ export default function SubmitForm({ event, userId }: { event: EventRecord; user
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "entry_create_failed");
 
-      setProgress("投稿完成，正在返回首頁…");
-      location.href = "/?submitted=1";
+      setProgress("投稿完成，正在顯示你的作品…");
+      router.replace("/submit?submitted=1");
     } catch (error) {
       if (uploadedPaths.length || uploadedOriginalPath) {
         await fetch("/api/submissions", {

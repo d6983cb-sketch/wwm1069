@@ -10,7 +10,12 @@ import MySubmission from "./MySubmission";
 
 export const dynamic = "force-dynamic";
 
-export default async function SubmitPage() {
+export default async function SubmitPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ submitted?: string }>;
+}) {
+  const query = await searchParams;
   const supabase = await createClient();
   const admin = createAdminClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -31,6 +36,9 @@ export default async function SubmitPage() {
     <SiteHeader nickname={profile.nickname} />
     <main className="inner">
       <header className="page-title"><small>SUBMISSION · 投稿</small><h1>留下一幅江湖之相</h1><p>每人僅能投稿一次，完成送出後不可修改、刪除或重新投稿。</p></header>
+      {query.submitted === "1" && existingEntry && (
+        <p className="submission-success" role="status">投稿已成功送出，以下是你的作品預覽。</p>
+      )}
       {profile.is_disqualified
         ? <div className="empty-state"><i>止</i><h3>目前無法投稿</h3><p>此帳號目前已被取消活動資格。</p></div>
         : existingEntry

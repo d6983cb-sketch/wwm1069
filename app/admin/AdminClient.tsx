@@ -306,6 +306,41 @@ export default function AdminClient({
     }
   };
 
+  const permanentlyDeleteEntry = async (entry: PendingEntry) => {
+    const entryLabel = entry.entry_code ?? `#${entry.id}`;
+    if (!confirm(
+      `即將永久刪除作品 ${entryLabel}（${entry.character_name}）。\n\n`
+      + "投稿、作品圖片、查核原圖、相關投票與得獎指派都會永久刪除，且無法復原。",
+    )) return;
+    const confirmation = prompt(`請輸入「永久刪除 ${entryLabel}」以繼續`);
+    if (confirmation !== `永久刪除 ${entryLabel}`) {
+      setMessage("確認文字不正確，作品未刪除。");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`/api/admin/entries/${entry.id}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          confirmation,
+          idempotencyKey: crypto.randomUUID(),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(body.message ?? (response.ok ? "作品已永久刪除。" : "永久刪除失敗。"));
+      if (response.ok) setTimeout(() => location.reload(), 700);
+    } catch {
+      setMessage("網路連線失敗，請重新整理後確認作品是否仍存在。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const announce = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     if (!event) return;
@@ -475,6 +510,7 @@ export default function AdminClient({
                       && prompt("請輸入「確認復原」以繼續") === "確認復原"
                       && action({ type: "entry_restore", entryId: entry.id })
                     )}>復原撤回</button>}
+                    {isSuperAdmin && <button className="danger permanent-delete" disabled={busy} onClick={() => permanentlyDeleteEntry(entry)}>永久刪除作品</button>}
                   </span>
                 </div>
               )) : <p className="muted">目前沒有投稿。</p>}

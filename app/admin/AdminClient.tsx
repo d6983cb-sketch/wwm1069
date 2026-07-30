@@ -350,18 +350,44 @@ export default function AdminClient({
     formEvent.preventDefault();
     if (!grantingEntry) return;
     const form = new FormData(formEvent.currentTarget);
-    const allowedPositions = form.getAll("allowed_position").map(Number);
-    if (!allowedPositions.length) {
-      setMessage("請至少選擇一張允許替換的圖片。");
+    const allowedImages = form.getAll("allowed_image").map((value) => String(value).split(":").map(Number));
+    const allowedPositions = allowedImages
+      .map(([position]) => position)
+      .filter((position) => position >= 1 && position <= 5);
+    const allowedImageIds = allowedImages.map(([, imageId]) => imageId);
+    const allowAddImages = form.get("allow_add_images") === "on";
+    const allowReplaceOriginal = form.get("allow_replace_original") === "on";
+    const allowReorderImages = form.get("allow_reorder_images") === "on";
+    const allowRemoveImages = form.get("allow_remove_images") === "on";
+    if (
+      !allowedPositions.length
+      && !allowAddImages
+      && !allowReplaceOriginal
+      && !allowReorderImages
+      && !allowRemoveImages
+    ) {
+      setMessage("請至少選擇一項允許的圖片修正功能。");
       return;
     }
+    const permissions = [
+      allowedPositions.length ? `替換第 ${allowedPositions.join("、")} 張公開圖片` : "",
+      allowAddImages ? "新增公開圖片" : "",
+      allowReplaceOriginal ? "更換 AI 合成前原圖" : "",
+      allowReorderImages ? "調整圖片順序" : "",
+      allowRemoveImages ? "移除公開圖片" : "",
+    ].filter(Boolean).join("、");
     if (!confirm(
-      `確定開放玩家「${grantingEntry.nickname}」修正作品 ${grantingEntry.entry_code ?? `#${grantingEntry.id}`} 的第 ${allowedPositions.join("、")} 張圖片？`,
+      `確定開放玩家「${grantingEntry.nickname}」修正作品 ${grantingEntry.entry_code ?? `#${grantingEntry.id}`}？\n允許：${permissions}`,
     )) return;
     const ok = await action({
       type: "entry_edit_grant_create",
       entryId: grantingEntry.id,
       allowedPositions,
+      allowedImageIds,
+      allowAddImages,
+      allowReplaceOriginal,
+      allowReorderImages,
+      allowRemoveImages,
       expiresAt: readTaipeiDate(form, "expires_at"),
       reason: form.get("reason"),
     });
@@ -926,19 +952,60 @@ export default function AdminClient({
             玩家：<b>{grantingEntry.nickname}</b><br />
             作品：<b>{grantingEntry.entry_code ?? `#${grantingEntry.id}`} · {grantingEntry.character_name}</b>
           </p>
-          <p className="muted">只授權這位投稿者修改這件作品的指定照片；作品資料、投稿時間與票數都不會變動。</p>
+          <p className="muted">只授權這位投稿者修改這件作品。新檔案會建立版本，舊照片與原圖不會被覆蓋；投稿時間與票數不會變動。</p>
           <form className="name-form" onSubmit={createCorrectionGrant}>
             <fieldset>
               <legend>允許替換的圖片</legend>
               <div className="grant-position-grid">
                 {grantingEntry.images.map((image) => (
                   <label key={image.id}>
-                    <input type="checkbox" name="allowed_position" value={image.position} defaultChecked />
+                    <input type="checkbox" name="allowed_image" value={`${image.position}:${image.id}`} defaultChecked />
                     <SubmissionImage image={image} alt={`第 ${image.position} 張作品照片`} />
                     <span>第 {image.position} 張</span>
                   </label>
                 ))}
               </div>
+            </fieldset>
+            <fieldset>
+              <legend>其他允許項目</legend>
+              <label className="grant-option">
+                <input
+                  type="checkbox"
+                  name="allow_add_images"
+                  disabled={grantingEntry.images.length >= 5}
+                />
+                <span>
+                  新增公開作品圖片
+                  <small>
+                    {grantingEntry.images.length >= 5
+                      ? "目前已有 5 張，無法再新增。"
+                      : `目前 ${grantingEntry.images.length} 張，最多還能新增 ${5 - grantingEntry.images.length} 張。`}
+                  </small>
+                </span>
+              </label>
+              {grantingEntry.uses_ai_background && (
+                <label className="grant-option">
+                  <input type="checkbox" name="allow_replace_original" />
+                  <span>
+                    更換 AI 合成前原圖
+                    <small>新原圖會另存版本，原本查核原圖完整保留。</small>
+                  </span>
+                </label>
+              )}
+              <label className="grant-option">
+                <input type="checkbox" name="allow_reorder_images" />
+                <span>
+                  調整公開圖片順序
+                  <small>只改變網站展示順序，原始資料與檔案不搬移。</small>
+                </span>
+              </label>
+              <label className="grant-option">
+                <input type="checkbox" name="allow_remove_images" />
+                <span>
+                  移除公開圖片
+                  <small>從作品頁隱藏，資料與 Storage 舊檔仍保留，可供管理員追查。</small>
+                </span>
+              </label>
             </fieldset>
             <label>
               修正期限（台北時間）

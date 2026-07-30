@@ -9,6 +9,8 @@ import AdminClient from "./AdminClient";
 import AdminRoleManager from "./AdminRoleManager";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
+  type EntryImageDisplaySetting,
   type EntryImageRevision,
   type SubmissionEditGrant,
 } from "@/lib/submission-corrections";
@@ -60,23 +62,28 @@ export default async function AdminPage() {
     ? await admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", entryIds).order("position")
     : { data: [] };
   const imageIds = (entryImages ?? []).map((image) => image.id);
-  const [{ data: imageRevisions }, { data: correctionGrants }] = await Promise.all([
+  const [{ data: imageRevisions }, { data: displaySettings }, { data: correctionGrants }] = await Promise.all([
     imageIds.length
       ? admin.from("entry_image_revisions")
           .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
           .in("image_id", imageIds)
           .order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
+    imageIds.length
+      ? admin.from("entry_image_display_settings")
+          .select("image_id,entry_id,display_position,is_hidden")
+          .in("image_id", imageIds)
+      : Promise.resolve({ data: [] }),
     entryIds.length && has("submission_manager")
       ? admin.from("submission_edit_grants")
-          .select("id,entry_id,grantee_profile_id,allowed_positions,reason,expires_at,is_active,revoked_at,created_at")
+          .select("id,entry_id,grantee_profile_id,allowed_positions,allowed_image_ids,allow_add_images,allow_replace_original,allow_reorder_images,allow_remove_images,reason,expires_at,is_active,revoked_at,created_at")
           .in("entry_id", entryIds)
           .order("created_at", { ascending: false })
       : Promise.resolve({ data: [] }),
   ]);
-  const displayedEntryImages = applyActiveImageRevisions(
-    entryImages ?? [],
-    imageRevisions as EntryImageRevision[] | null,
+  const displayedEntryImages = applyImageDisplaySettings(
+    applyActiveImageRevisions(entryImages ?? [], imageRevisions as EntryImageRevision[] | null),
+    displaySettings as EntryImageDisplaySetting[] | null,
   );
   const entries = (rawEntries ?? []).map((entry) => ({
     ...entry,

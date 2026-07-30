@@ -9,6 +9,8 @@ import { isSubmissionOpen } from "@/lib/types";
 import MySubmission from "./MySubmission";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
+  type EntryImageDisplaySetting,
   isGrantUsable,
   type EntryImageRevision,
   type SubmissionEditGrant,
@@ -39,13 +41,18 @@ export default async function SubmitPage({
     ? await admin.from("entry_images").select("id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").eq("entry_id", existingEntry.id).order("position")
     : { data: [] };
   const imageIds = (ownImages ?? []).map((image) => image.id);
-  const [{ data: revisions }, { data: correctionGrantData }] = existingEntry
+  const [{ data: revisions }, { data: displaySettings }, { data: correctionGrantData }] = existingEntry
     ? await Promise.all([
         imageIds.length
           ? admin.from("entry_image_revisions").select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at").in("image_id", imageIds).eq("is_active", true)
           : Promise.resolve({ data: [] }),
+        imageIds.length
+          ? admin.from("entry_image_display_settings")
+              .select("image_id,entry_id,display_position,is_hidden")
+              .in("image_id", imageIds)
+          : Promise.resolve({ data: [] }),
         admin.from("submission_edit_grants")
-          .select("id,entry_id,grantee_profile_id,allowed_positions,reason,expires_at,is_active,revoked_at,created_at")
+          .select("id,entry_id,grantee_profile_id,allowed_positions,allowed_image_ids,allow_add_images,allow_replace_original,allow_reorder_images,allow_remove_images,reason,expires_at,is_active,revoked_at,created_at")
           .eq("entry_id", existingEntry.id)
           .eq("grantee_profile_id", user.id)
           .eq("is_active", true)
@@ -54,11 +61,15 @@ export default async function SubmitPage({
           .limit(1)
           .maybeSingle(),
       ])
-    : [{ data: [] }, { data: null }];
+    : [{ data: [] }, { data: [] }, { data: null }];
   const correctionGrant = correctionGrantData as SubmissionEditGrant | null;
-  const displayedImages = applyActiveImageRevisions(
+  const revisionAppliedImages = applyActiveImageRevisions(
     ownImages ?? [],
     revisions as EntryImageRevision[] | null,
+  );
+  const displayedImages = applyImageDisplaySettings(
+    revisionAppliedImages,
+    displaySettings as EntryImageDisplaySetting[] | null,
   );
   return <>
     <SiteHeader nickname={profile.nickname} />
@@ -76,6 +87,8 @@ export default async function SubmitPage({
               eventStatus={event?.status}
               userId={user.id}
               correctionGrant={isGrantUsable(correctionGrant) ? correctionGrant : null}
+              correctionImages={revisionAppliedImages}
+              correctionDisplaySettings={displaySettings as EntryImageDisplaySetting[] | null}
             />
           : event && isSubmissionOpen(event)
         ? <SubmitForm event={event} userId={user.id} />

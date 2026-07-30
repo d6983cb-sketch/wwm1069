@@ -73,10 +73,14 @@ export async function DELETE(
     );
   }
 
-  const { data: revisionObjects } = await admin
-    .from("entry_image_revisions")
-    .select("storage_object_path")
-    .eq("entry_id", entryId);
+  const [{ data: revisionObjects }, { data: originalRevisionObjects }] = await Promise.all([
+    admin.from("entry_image_revisions")
+      .select("storage_object_path")
+      .eq("entry_id", entryId),
+    admin.from("entry_original_image_revisions")
+      .select("storage_object_path")
+      .eq("entry_id", entryId),
+  ]);
   const { data, error } = await admin.rpc("admin_permanently_delete_entry", {
     target_entry_id: entryId,
   });
@@ -106,8 +110,11 @@ export async function DELETE(
     allEntryPaths.length
       ? admin.storage.from("cos-entries").remove(allEntryPaths)
       : Promise.resolve({ error: null }),
-    deleted.original_image_path
-      ? admin.storage.from("cos-originals").remove([deleted.original_image_path])
+    deleted.original_image_path || originalRevisionObjects?.length
+      ? admin.storage.from("cos-originals").remove([...new Set([
+          ...(deleted.original_image_path ? [deleted.original_image_path] : []),
+          ...(originalRevisionObjects ?? []).map((item) => item.storage_object_path),
+        ])])
       : Promise.resolve({ error: null }),
   ]);
   const storageError = entryStorage.error?.message || originalStorage.error?.message || null;
@@ -120,7 +127,11 @@ export async function DELETE(
     beforeData: deleted,
     afterData: {
       deleted: true,
-      storage_objects_requested: allEntryPaths.length + (deleted.original_image_path ? 1 : 0),
+      storage_objects_requested: (
+        allEntryPaths.length
+        + (deleted.original_image_path ? 1 : 0)
+        + (originalRevisionObjects?.length ?? 0)
+      ),
       storage_cleanup_succeeded: !storageError,
     },
     result: storageError ? "failure" : "success",

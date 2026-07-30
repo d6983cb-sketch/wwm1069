@@ -6,6 +6,10 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { canShowAwards, type SubmissionImageRecord } from "@/lib/types";
 import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
+import {
+  applyActiveImageRevisions,
+  type EntryImageRevision,
+} from "@/lib/submission-corrections";
 
 export const dynamic = "force-dynamic";
 
@@ -67,12 +71,23 @@ export default async function AwardsPage() {
       admin.from("award_exclusions").select("award_a_id,award_b_id").eq("event_id", event.id),
     ]);
     const tieHandling = isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint";
+    const imageIds = (images ?? []).map((image) => image.id);
+    const { data: imageRevisions } = imageIds.length
+      ? await admin.from("entry_image_revisions")
+          .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+          .in("image_id", imageIds)
+          .eq("is_active", true)
+      : { data: [] };
+    const displayedImages = applyActiveImageRevisions(
+      images ?? [],
+      imageRevisions as EntryImageRevision[] | null,
+    );
     const source = (entries ?? []).filter(
       (entry) => !owners?.find((owner) => owner.id === entry.owner_id)?.is_disqualified,
     ).map((entry) => ({
       ...entry,
       nickname: owners?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知玩家",
-      image: images?.find((image) => image.entry_id === entry.id) ?? null,
+      image: displayedImages.find((image) => image.entry_id === entry.id) ?? null,
       votes: 0,
       rank: 0,
     }));

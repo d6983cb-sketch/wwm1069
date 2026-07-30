@@ -5,6 +5,10 @@ import SiteHeader from "@/app/components/SiteHeader";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeSubmissionImage, type EntryRecord, type EventRecord } from "@/lib/types";
+import {
+  applyActiveImageRevisions,
+  type EntryImageRevision,
+} from "@/lib/submission-corrections";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +41,17 @@ export default async function HomePage() {
     : votingPhase
       ? event?.voting_identity_mode !== "anonymous"
       : event?.submission_identity_mode !== "anonymous";
+  const imageIds = (images ?? []).map((image) => image.id);
+  const { data: imageRevisions } = imageIds.length
+    ? await admin.from("entry_image_revisions")
+        .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+        .in("image_id", imageIds)
+        .eq("is_active", true)
+    : { data: [] };
+  const displayedImages = applyActiveImageRevisions(
+    images ?? [],
+    imageRevisions as EntryImageRevision[] | null,
+  );
   const entries: EntryRecord[] = (rawEntries ?? []).filter((entry) =>
     !profiles?.find((item) => item.id === entry.owner_id)?.is_disqualified
   ).map((entry) => ({
@@ -50,7 +65,7 @@ export default async function HomePage() {
     nickname: showAuthors
       ? profiles?.find((item) => item.id === entry.owner_id)?.nickname ?? "未知玩家"
       : "匿名參賽者",
-    images: (images ?? []).filter((item) => item.entry_id === entry.id).map(normalizeSubmissionImage),
+    images: displayedImages.filter((item) => item.entry_id === entry.id).map(normalizeSubmissionImage),
     vote_count: (allVotes ?? []).filter((vote) => vote.entry_id === entry.id).length,
   })).filter((entry) => entry.images.length > 0);
   for (let index = entries.length - 1; index > 0; index -= 1) {

@@ -4,6 +4,8 @@ import { useState } from "react";
 import ImageCropEditor from "@/app/components/ImageCropEditor";
 import SubmissionImage from "@/app/components/SubmissionImage";
 import { normalizeSubmissionImage, type SubmissionImageRecord } from "@/lib/types";
+import type { SubmissionEditGrant } from "@/lib/submission-corrections";
+import SubmissionCorrectionEditor from "./SubmissionCorrectionEditor";
 
 type OwnEntry = {
   id: number;
@@ -22,10 +24,14 @@ export default function MySubmission({
   entry,
   eventStatus,
   canEditCrop,
+  userId,
+  correctionGrant,
 }: {
   entry: OwnEntry;
   eventStatus?: string | null;
   canEditCrop: boolean;
+  userId: string;
+  correctionGrant: SubmissionEditGrant | null;
 }) {
   const [withdrawn, setWithdrawn] = useState(Boolean(entry.withdrawn_at));
   const [busy, setBusy] = useState(false);
@@ -113,6 +119,14 @@ export default function MySubmission({
         <div><dt>投稿狀態</dt><dd>{withdrawn ? "已撤回" : entry.status}</dd></div>
         <div><dt>顯示模式</dt><dd>依活動匿名／實名設定</dd></div>
       </dl>
+      {correctionGrant && !withdrawn && (
+        <SubmissionCorrectionEditor
+          entryId={entry.id}
+          userId={userId}
+          grant={correctionGrant}
+          images={images}
+        />
+      )}
       {canChange && (
         <div className="own-submission-actions">
           {cropEditable && <button type="button" disabled={busy} onClick={() => setEditingImages((current) => !current)}>{editingImages ? "關閉圖片編輯" : "編輯圖片位置"}</button>}

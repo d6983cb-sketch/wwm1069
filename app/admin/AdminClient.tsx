@@ -6,6 +6,7 @@ import SubmissionImage from "@/app/components/SubmissionImage";
 import { normalizeSubmissionImage, type EventRecord, type SubmissionImageRecord } from "@/lib/types";
 import type { AdminPermissions } from "@/lib/admin-access";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
+import type { SubmissionEditGrant } from "@/lib/submission-corrections";
 
 type AdminTab = "overview" | "entries" | "votes" | "players" | "settings" | "announcements" | "awards" | "backups" | "audit";
 type PendingEntry = {
@@ -21,6 +22,8 @@ type PendingEntry = {
   status: string;
   withdrawn_at: string | null;
   images: SubmissionImageRecord[];
+  correction_grant: SubmissionEditGrant | null;
+  revision_count: number;
 };
 type AdminPlayer = {
   id: string;
@@ -149,6 +152,8 @@ export default function AdminClient({
   const [selectedAwardRank, setSelectedAwardRank] = useState<Record<string, string>>({});
   const [editingCropEntry, setEditingCropEntry] = useState<PendingEntry | null>(null);
   const [adminCropImages, setAdminCropImages] = useState<SubmissionImageRecord[]>([]);
+  const [grantingEntry, setGrantingEntry] = useState<PendingEntry | null>(null);
+  const [renderedAt] = useState(() => Date.now());
   const can = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
   const visibleTabs = useMemo(() => tabs.filter((tab) => {
     const allowed = (permission: keyof AdminPermissions) => isSuperAdmin || permissions[permission] === true;
@@ -341,6 +346,42 @@ export default function AdminClient({
     }
   };
 
+  const createCorrectionGrant = async (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    if (!grantingEntry) return;
+    const form = new FormData(formEvent.currentTarget);
+    const allowedPositions = form.getAll("allowed_position").map(Number);
+    if (!allowedPositions.length) {
+      setMessage("請至少選擇一張允許替換的圖片。");
+      return;
+    }
+    if (!confirm(
+      `確定開放玩家「${grantingEntry.nickname}」修正作品 ${grantingEntry.entry_code ?? `#${grantingEntry.id}`} 的第 ${allowedPositions.join("、")} 張圖片？`,
+    )) return;
+    const ok = await action({
+      type: "entry_edit_grant_create",
+      entryId: grantingEntry.id,
+      allowedPositions,
+      expiresAt: readTaipeiDate(form, "expires_at"),
+      reason: form.get("reason"),
+    });
+    if (ok) setGrantingEntry(null);
+  };
+
+  const revokeCorrectionGrant = async (entry: PendingEntry) => {
+    if (!entry.correction_grant) return;
+    const label = entry.entry_code ?? `#${entry.id}`;
+    if (!confirm(`確定撤銷玩家「${entry.nickname}」對作品 ${label} 的圖片修正權限？已完成的修訂不會自動消失。`)) return;
+    if (prompt("請輸入「確認撤銷」以繼續") !== "確認撤銷") {
+      setMessage("確認文字不正確，權限未撤銷。");
+      return;
+    }
+    await action({
+      type: "entry_edit_grant_revoke",
+      grantId: entry.correction_grant.id,
+    });
+  };
+
   const announce = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     if (!event) return;
@@ -498,10 +539,27 @@ export default function AdminClient({
                   <span><b>{entry.character_name}</b><small>{entry.source_game}</small></span>
                   <span>{entry.nickname}</span>
                   <i>{entry.withdrawn_at ? "已撤回" : statusText[entry.status] ?? entry.status}</i>
-                  <span>{entry.original_image_path ? <a target="_blank" href={`/api/admin/original/${entry.id}`}>查看原圖</a> : "無原圖"}</span>
+                  <span>
+                    {entry.original_image_path ? <a target="_blank" href={`/api/admin/original/${entry.id}`}>查看原圖</a> : "無原圖"}
+                    {entry.revision_count > 0 && <small>修訂 {entry.revision_count} 次</small>}
+                  </span>
                   <span className="row-actions">
                     <a href={`/entry/${entry.id}`} target="_blank">查看作品</a>
                     {can("submission_manager") && <button disabled={busy} onClick={() => openCropEditor(entry)}>編輯圖片</button>}
+                    {can("submission_manager") && !entry.correction_grant && (
+                      <button disabled={busy} onClick={() => {
+                        setGrantingEntry(entry);
+                        setMessage("");
+                      }}>開放玩家修正</button>
+                    )}
+                    {can("submission_manager") && entry.correction_grant && (
+                      <>
+                        <span className="grant-status">
+                          {Date.parse(entry.correction_grant.expires_at) > renderedAt ? "修正授權中" : "修正授權已到期"}
+                        </span>
+                        <button className="danger" disabled={busy} onClick={() => revokeCorrectionGrant(entry)}>撤銷修正權限</button>
+                      </>
+                    )}
                     {can("submission_manager") && <button disabled={busy} onClick={() => regenerateDisplay(entry)}>重新生成展示圖</button>}
                     {can("submission_manager") && <button className="danger" disabled={busy} onClick={() => confirm(`確定取消作品 ${entry.entry_code ?? `#${entry.id}`} 的參賽資格？投稿、圖片與投票都會保留。`) && action({ type: "entry_status", entryId: entry.id, status: "disqualified" })}>取消資格</button>}
                     {can("submission_manager") && entry.status !== "approved" && <button disabled={busy} onClick={() => confirm(`確定恢復作品 ${entry.entry_code ?? `#${entry.id}`} 的公開狀態？`) && action({ type: "entry_status", entryId: entry.id, status: "approved" })}>恢復展示</button>}
@@ -857,6 +915,48 @@ export default function AdminClient({
             <button type="button" className="primary" disabled={busy} onClick={saveAdminCrops}>{busy ? "儲存中…" : "儲存全部圖片位置"}</button>
             <button type="button" disabled={busy} onClick={() => setEditingCropEntry(null)}>取消</button>
           </div>
+        </section>
+      </div>}
+      {grantingEntry && <div className="backdrop" onMouseDown={(event) => event.currentTarget === event.target && !busy && setGrantingEntry(null)}>
+        <section className="modal correction-grant-modal">
+          <button className="close" type="button" disabled={busy} onClick={() => setGrantingEntry(null)}>×</button>
+          <small>SPECIAL CORRECTION</small>
+          <h2>開放指定作品圖片修正</h2>
+          <p>
+            玩家：<b>{grantingEntry.nickname}</b><br />
+            作品：<b>{grantingEntry.entry_code ?? `#${grantingEntry.id}`} · {grantingEntry.character_name}</b>
+          </p>
+          <p className="muted">只授權這位投稿者修改這件作品的指定照片；作品資料、投稿時間與票數都不會變動。</p>
+          <form className="name-form" onSubmit={createCorrectionGrant}>
+            <fieldset>
+              <legend>允許替換的圖片</legend>
+              <div className="grant-position-grid">
+                {grantingEntry.images.map((image) => (
+                  <label key={image.id}>
+                    <input type="checkbox" name="allowed_position" value={image.position} defaultChecked />
+                    <SubmissionImage image={image} alt={`第 ${image.position} 張作品照片`} />
+                    <span>第 {image.position} 張</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label>
+              修正期限（台北時間）
+              <input
+                name="expires_at"
+                type="datetime-local"
+                min={toTaipeiInput(new Date(renderedAt + 5 * 60 * 1000).toISOString())}
+                max={toTaipeiInput(new Date(renderedAt + 7 * 24 * 60 * 60 * 1000).toISOString())}
+                defaultValue={toTaipeiInput(new Date(renderedAt + 24 * 60 * 60 * 1000).toISOString())}
+                required
+              />
+            </label>
+            <label>
+              修正原因／說明
+              <textarea name="reason" rows={4} maxLength={500} placeholder="例如：第 2 張照片不符合活動規範，請於期限內替換。" required />
+            </label>
+            <button className="primary" disabled={busy}>{busy ? "建立授權中…" : "確認開放修正"}</button>
+          </form>
         </section>
       </div>}
       {editingPlayer && <div className="backdrop" onMouseDown={(e) => e.currentTarget === e.target && !busy && setEditingPlayer(null)}>

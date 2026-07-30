@@ -7,6 +7,11 @@ import type { EventRecord } from "@/lib/types";
 import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 import AdminClient from "./AdminClient";
 import AdminRoleManager from "./AdminRoleManager";
+import {
+  applyActiveImageRevisions,
+  type EntryImageRevision,
+  type SubmissionEditGrant,
+} from "@/lib/submission-corrections";
 
 export const dynamic = "force-dynamic";
 
@@ -54,10 +59,33 @@ export default async function AdminPage() {
   const { data: entryImages } = entryIds.length
     ? await admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", entryIds).order("position")
     : { data: [] };
+  const imageIds = (entryImages ?? []).map((image) => image.id);
+  const [{ data: imageRevisions }, { data: correctionGrants }] = await Promise.all([
+    imageIds.length
+      ? admin.from("entry_image_revisions")
+          .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+          .in("image_id", imageIds)
+          .order("created_at", { ascending: false })
+      : Promise.resolve({ data: [] }),
+    entryIds.length && has("submission_manager")
+      ? admin.from("submission_edit_grants")
+          .select("id,entry_id,grantee_profile_id,allowed_positions,reason,expires_at,is_active,revoked_at,created_at")
+          .in("entry_id", entryIds)
+          .order("created_at", { ascending: false })
+      : Promise.resolve({ data: [] }),
+  ]);
+  const displayedEntryImages = applyActiveImageRevisions(
+    entryImages ?? [],
+    imageRevisions as EntryImageRevision[] | null,
+  );
   const entries = (rawEntries ?? []).map((entry) => ({
     ...entry,
     nickname: relatedProfiles?.find((owner) => owner.id === entry.owner_id)?.nickname ?? "未知",
-    images: (entryImages ?? []).filter((image) => image.entry_id === entry.id),
+    images: displayedEntryImages.filter((image) => image.entry_id === entry.id),
+    correction_grant: (correctionGrants as SubmissionEditGrant[] | null)?.find(
+      (grant) => grant.entry_id === entry.id && grant.is_active,
+    ) ?? null,
+    revision_count: (imageRevisions ?? []).filter((revision) => revision.entry_id === entry.id).length,
   }));
   const voteRecords = (has("statistics_viewer") || has("report_viewer") ? rawVotes ?? [] : []).map((vote) => ({
     id: vote.id,

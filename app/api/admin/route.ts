@@ -43,7 +43,12 @@ function permissionFor(type: string): { permission?: AdminPermission; superOnly?
   if (["player_admin", "admin_permissions"].includes(type)) return { superOnly: true };
   if (type === "player_update") return { permission: "player_manager" };
   if (type === "player_disqualify") return { permission: "eligibility_manager" };
-  if (["entry_status", "entry_restore"].includes(type)) return { permission: "submission_manager" };
+  if ([
+    "entry_status",
+    "entry_restore",
+    "entry_edit_grant_create",
+    "entry_edit_grant_revoke",
+  ].includes(type)) return { permission: "submission_manager" };
   if (["event", "event_create"].includes(type)) return { permission: "event_manager" };
   if (type.startsWith("award_assignment")) return { permission: "award_assigner" };
   if (type.startsWith("award")) return { permission: "award_manager" };
@@ -256,6 +261,98 @@ export async function POST(request: Request) {
         .single();
       if (error) return response("entry_restore_failed", "投稿復原失敗。", 500);
       await writeAuditLog({ context, actionType: "entry_restore", targetType: "entry", targetId: entryId, beforeData: before, afterData: after });
+    } else if (type === "entry_edit_grant_create") {
+      const entryId = Number(body.entryId);
+      const expiresAt = normalizeZonedDate(body.expiresAt);
+      const reason = String(body.reason ?? "").trim().slice(0, 500) || null;
+      const allowedPositions = Array.isArray(body.allowedPositions)
+        ? [...new Set(body.allowedPositions.map(Number))]
+        : [];
+      if (
+        !Number.isInteger(entryId)
+        || !expiresAt
+        || allowedPositions.length < 1
+        || allowedPositions.length > 5
+        || allowedPositions.some((position) => !Number.isInteger(position) || position < 1 || position > 5)
+      ) {
+        return response("invalid_correction_grant", "請選擇至少一張圖片並設定有效期限。", 400);
+      }
+      const expiryTime = Date.parse(expiresAt);
+      if (expiryTime <= Date.now() || expiryTime > Date.now() + 7 * 24 * 60 * 60 * 1000) {
+        return response("invalid_correction_expiry", "修正期限必須在現在之後、七天以內。", 400);
+      }
+      const [{ data: entry }, { data: images }, { data: activeGrant }] = await Promise.all([
+        admin.from("entries").select("id,entry_code,event_id,owner_id,character_name,withdrawn_at").eq("id", entryId).maybeSingle(),
+        admin.from("entry_images").select("id,entry_id,position").eq("entry_id", entryId),
+        admin.from("submission_edit_grants").select("*").eq("entry_id", entryId).eq("is_active", true).maybeSingle(),
+      ]);
+      if (!entry) return response("entry_not_found", "找不到投稿。", 404);
+      if (entry.withdrawn_at) return response("entry_withdrawn", "已撤回的投稿不能開啟圖片修正。", 422);
+      if (activeGrant) return response("grant_exists", "這件作品已有啟用中的修正權限，請先撤銷或等待到期。", 409);
+      const actualPositions = new Set((images ?? []).map((image) => image.position));
+      if (allowedPositions.some((position) => !actualPositions.has(position))) {
+        return response("image_position_not_found", "選取的圖片序號不存在。", 400);
+      }
+      const { data: created, error } = await admin
+        .from("submission_edit_grants")
+        .insert({
+          entry_id: entryId,
+          grantee_profile_id: entry.owner_id,
+          allowed_positions: allowedPositions.sort((left, right) => left - right),
+          reason,
+          expires_at: expiresAt,
+          granted_by: context.profile.id,
+        })
+        .select("*")
+        .single();
+      if (error) {
+        if (error.code === "23505") return response("grant_exists", "這件作品已有啟用中的修正權限。", 409);
+        return response("grant_create_failed", "圖片修正權限建立失敗。", 500);
+      }
+      await writeAuditLog({
+        context,
+        actionType: "submission_edit_grant_create",
+        targetType: "entry",
+        targetId: entryId,
+        afterData: {
+          ...created,
+          entry_code: entry.entry_code,
+          character_name: entry.character_name,
+        },
+      });
+      return NextResponse.json({ ok: true, message: "已開放指定玩家修正所選圖片。" });
+    } else if (type === "entry_edit_grant_revoke") {
+      const grantId = String(body.grantId ?? "");
+      if (!grantId) return response("invalid_grant", "修正權限編號不正確。", 400);
+      const { data: before } = await admin
+        .from("submission_edit_grants")
+        .select("*")
+        .eq("id", grantId)
+        .maybeSingle();
+      if (!before) return response("grant_not_found", "找不到圖片修正權限。", 404);
+      if (!before.is_active) return response("grant_already_revoked", "這項修正權限已經停用。", 409);
+      const { data: after, error } = await admin
+        .from("submission_edit_grants")
+        .update({
+          is_active: false,
+          revoked_at: new Date().toISOString(),
+          revoked_by: context.profile.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", grantId)
+        .eq("is_active", true)
+        .select("*")
+        .single();
+      if (error) return response("grant_revoke_failed", "圖片修正權限撤銷失敗。", 500);
+      await writeAuditLog({
+        context,
+        actionType: "submission_edit_grant_revoke",
+        targetType: "entry",
+        targetId: before.entry_id,
+        beforeData: before,
+        afterData: after,
+      });
+      return NextResponse.json({ ok: true, message: "已撤銷這件作品的圖片修正權限。" });
     } else if (type === "event") {
       const eventId = String(body.eventId ?? "");
       const allowed = [

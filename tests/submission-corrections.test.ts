@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
   isGrantUsable,
   type EntryImageRevision,
   type SubmissionEditGrant,
@@ -64,6 +65,11 @@ test("correction grant must be active, unrevoked, and unexpired", () => {
     entry_id: 7,
     grantee_profile_id: "player",
     allowed_positions: [2],
+    allowed_image_ids: [11],
+    allow_add_images: false,
+    allow_replace_original: false,
+    allow_reorder_images: false,
+    allow_remove_images: false,
     reason: null,
     expires_at: "2026-08-02T00:00:00.000Z",
     is_active: true,
@@ -73,6 +79,46 @@ test("correction grant must be active, unrevoked, and unexpired", () => {
   assert.equal(isGrantUsable(grant, Date.parse("2026-08-01T00:00:00.000Z")), true);
   assert.equal(isGrantUsable({ ...grant, revoked_at: "2026-08-01T00:00:00.000Z" }, Date.parse("2026-08-01T00:00:00.000Z")), false);
   assert.equal(isGrantUsable(grant, Date.parse("2026-08-03T00:00:00.000Z")), false);
+});
+
+test("display settings can reorder and hide without changing baseline image rows", () => {
+  const secondImage = { ...baselineImage, id: 12, position: 1 };
+  const displayed = applyImageDisplaySettings(
+    [baselineImage, secondImage],
+    [
+      { image_id: 11, entry_id: 7, display_position: 1, is_hidden: false },
+      { image_id: 12, entry_id: 7, display_position: 2, is_hidden: true },
+    ],
+  );
+  assert.deepEqual(displayed.map((image) => image.id), [11]);
+  assert.equal(displayed[0].position, 1);
+  assert.equal(baselineImage.position, 2);
+  assert.equal(secondImage.position, 1);
+});
+
+test("media correction migration preserves old files and canonical contest records", () => {
+  const migration = readFileSync(
+    new URL("../supabase/migrations/20260731170000_extend_submission_media_corrections.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  for (const forbidden of [
+    "drop table",
+    "truncate",
+    "on delete cascade",
+    "delete from public.entries",
+    "delete from public.votes",
+    "update public.entries",
+    "update public.votes",
+    "update public.entry_images",
+  ]) {
+    assert.equal(migration.includes(forbidden), false, `migration contains ${forbidden}`);
+  }
+  assert.match(migration, /entry_original_image_revisions/);
+  assert.match(migration, /entry_image_display_settings/);
+  assert.match(migration, /allow_add_images/);
+  assert.match(migration, /allow_replace_original/);
+  assert.match(migration, /allow_reorder_images/);
+  assert.match(migration, /allow_remove_images/);
 });
 
 test("correction migration is append-only for canonical contest data", () => {

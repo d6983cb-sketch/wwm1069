@@ -5,6 +5,7 @@ import ImageCropEditor from "@/app/components/ImageCropEditor";
 import SubmissionImage from "@/app/components/SubmissionImage";
 import { normalizeSubmissionImage, type SubmissionImageRecord } from "@/lib/types";
 import type { SubmissionEditGrant } from "@/lib/submission-corrections";
+import type { EntryImageDisplaySetting } from "@/lib/submission-corrections";
 import SubmissionCorrectionEditor from "./SubmissionCorrectionEditor";
 
 type OwnEntry = {
@@ -26,12 +27,16 @@ export default function MySubmission({
   canEditCrop,
   userId,
   correctionGrant,
+  correctionImages,
+  correctionDisplaySettings,
 }: {
   entry: OwnEntry;
   eventStatus?: string | null;
   canEditCrop: boolean;
   userId: string;
   correctionGrant: SubmissionEditGrant | null;
+  correctionImages: SubmissionImageRecord[];
+  correctionDisplaySettings: EntryImageDisplaySetting[] | null;
 }) {
   const [withdrawn, setWithdrawn] = useState(Boolean(entry.withdrawn_at));
   const [busy, setBusy] = useState(false);
@@ -124,7 +129,8 @@ export default function MySubmission({
           entryId={entry.id}
           userId={userId}
           grant={correctionGrant}
-          images={images}
+          images={correctionImages}
+          displaySettings={correctionDisplaySettings}
         />
       )}
       {canChange && (

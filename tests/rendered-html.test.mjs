@@ -108,11 +108,13 @@ test("every Discord login requests the email required by Supabase Auth", async (
 test("AI background originals are appended to the public entry gallery with a signed URL", async () => {
   const entryPage = await readFile(new URL("../app/entry/[id]/page.tsx", import.meta.url), "utf8");
   const carousel = await readFile(new URL("../app/components/ImageCarousel.tsx", import.meta.url), "utf8");
+  const nextConfig = await readFile(new URL("../next.config.ts", import.meta.url), "utf8");
   assert.match(entryPage, /\.from\("cos-originals"\)\.createSignedUrl\(entry\.original_image_path,\s*60 \* 60\)/);
   assert.match(entryPage, /label:\s*"AI 合成前原圖"/);
   assert.match(entryPage, /images=\{galleryImages\}/);
   assert.doesNotMatch(entryPage, /\.from\("cos-originals"\)\.getPublicUrl/);
   assert.match(carousel, /carousel-badge/);
+  assert.match(nextConfig, /pathname:\s*"\/storage\/v1\/object\/sign\/\*\*"/);
 });
 
 test("permanent deletion is super-admin-only and requires typed confirmation", async () => {

@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
+  type EntryImageDisplaySetting,
   type EntryImageRevision,
 } from "@/lib/submission-corrections";
 
@@ -23,27 +25,39 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
   ]);
   if (!entry) notFound();
   const { data: event } = await admin.from("events").select("leaderboard_mode,status,submission_identity_mode,voting_identity_mode,reveal_authors_after_results").eq("id", entry.event_id).single();
+  const { data: originalRevision } = await admin
+    .from("entry_original_image_revisions")
+    .select("storage_object_path")
+    .eq("entry_id", entry.id)
+    .eq("is_active", true)
+    .maybeSingle();
+  const activeOriginalPath = originalRevision?.storage_object_path ?? entry.original_image_path;
   const [{ data: owner }, { data: images }, voteResult, originalResult] = await Promise.all([
     admin.from("profiles").select("nickname,is_disqualified").eq("id", entry.owner_id).single(),
     admin.from("entry_images").select("id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").eq("entry_id", entry.id).order("position"),
     event?.leaderboard_mode === "hidden"
       ? Promise.resolve({ count: 0 })
       : admin.from("votes").select("*", { count: "exact", head: true }).eq("entry_id", entry.id),
-    entry.uses_ai_background && entry.original_image_path
-      ? admin.storage.from("cos-originals").createSignedUrl(entry.original_image_path, 60 * 60)
+    entry.uses_ai_background && activeOriginalPath
+      ? admin.storage.from("cos-originals").createSignedUrl(activeOriginalPath, 60 * 60)
       : Promise.resolve({ data: null }),
   ]);
   if (owner?.is_disqualified) notFound();
   const imageIds = (images ?? []).map((image) => image.id);
-  const { data: imageRevisions } = imageIds.length
-    ? await admin.from("entry_image_revisions")
-        .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
-        .in("image_id", imageIds)
-        .eq("is_active", true)
-    : { data: [] };
-  const displayedImages = applyActiveImageRevisions(
-    images ?? [],
-    imageRevisions as EntryImageRevision[] | null,
+  const [{ data: imageRevisions }, { data: displaySettings }] = imageIds.length
+    ? await Promise.all([
+        admin.from("entry_image_revisions")
+          .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+          .in("image_id", imageIds)
+          .eq("is_active", true),
+        admin.from("entry_image_display_settings")
+          .select("image_id,entry_id,display_position,is_hidden")
+          .in("image_id", imageIds),
+      ])
+    : [{ data: [] }, { data: [] }];
+  const displayedImages = applyImageDisplaySettings(
+    applyActiveImageRevisions(images ?? [], imageRevisions as EntryImageRevision[] | null),
+    displaySettings as EntryImageDisplaySetting[] | null,
   );
   const count = voteResult.count;
   const resultsPhase = event?.status === "results_published" || event?.status === "archived";

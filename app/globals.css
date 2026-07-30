@@ -77,6 +77,10 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .grant-position-grid input{position:absolute;z-index:2;left:12px;top:12px;width:18px;height:18px;accent-color:var(--jade)}
 .grant-position-grid .submission-image{margin-bottom:6px}
 .grant-position-grid span{font-size:12px;color:var(--paper)}
+.grant-option{display:flex!important;gap:10px;align-items:flex-start;padding:9px 0}
+.grant-option input{flex:0 0 auto;margin-top:4px}
+.grant-option span{display:flex;flex-direction:column;color:var(--paper)}
+.grant-option small{margin-top:3px;color:var(--dim)}
 .submission-correction{margin-top:24px;padding:22px;border:1px solid var(--gold);background:linear-gradient(135deg,#171d18,#0b100d)}
 .submission-correction header{padding-bottom:16px;border-bottom:1px solid var(--line)}
 .submission-correction header small{color:var(--jade);letter-spacing:.14em}
@@ -88,6 +92,16 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .correction-slots article>span{display:block;margin-bottom:7px;color:var(--gold)}
 .correction-slots article>button,.correction-file{display:flex;width:100%;min-height:40px;margin-top:8px;align-items:center;justify-content:center;border:1px solid var(--line);background:#101713;color:var(--gold);cursor:pointer}
 .correction-file input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.correction-extra{margin:18px 0;padding:15px;border:1px solid var(--line);background:#0b100d}
+.correction-extra h4{margin:0 0 8px;font:20px var(--serif);color:var(--gold)}
+.correction-extra p{margin:0 0 10px;color:var(--dim)}
+.correction-extra>button{margin-top:8px}
+.correction-order-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.correction-order-list article{padding:9px;border:1px solid var(--line);background:#101713}
+.correction-order-list article.is-hidden{opacity:.55;border-style:dashed}
+.correction-order-list article>span{display:block;margin:7px 0;color:var(--paper);font-size:13px}
+.correction-order-list article>div{display:flex;gap:6px}
+.correction-order-list article button{min-height:36px;margin-top:6px}
 .submission-correction>h4{margin:22px 0 0;font:20px var(--serif)}
 .submission-correction>.primary{width:100%;margin-top:14px}
 @media(max-width:760px){

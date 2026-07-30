@@ -19,12 +19,15 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
   ]);
   if (!entry) notFound();
   const { data: event } = await admin.from("events").select("leaderboard_mode,status,submission_identity_mode,voting_identity_mode,reveal_authors_after_results").eq("id", entry.event_id).single();
-  const [{ data: owner }, { data: images }, voteResult] = await Promise.all([
+  const [{ data: owner }, { data: images }, voteResult, originalResult] = await Promise.all([
     admin.from("profiles").select("nickname,is_disqualified").eq("id", entry.owner_id).single(),
     admin.from("entry_images").select("id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").eq("entry_id", entry.id).order("position"),
     event?.leaderboard_mode === "hidden"
       ? Promise.resolve({ count: 0 })
       : admin.from("votes").select("*", { count: "exact", head: true }).eq("entry_id", entry.id),
+    entry.uses_ai_background && entry.original_image_path
+      ? admin.storage.from("cos-originals").createSignedUrl(entry.original_image_path, 60 * 60)
+      : Promise.resolve({ data: null }),
   ]);
   if (owner?.is_disqualified) notFound();
   const count = voteResult.count;
@@ -35,9 +38,20 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
     : votingPhase
       ? event?.voting_identity_mode !== "anonymous"
       : event?.submission_identity_mode !== "anonymous";
+  const originalImage = originalResult.data;
+  const galleryImages = originalImage?.signedUrl
+    ? [
+        ...(images ?? []),
+        {
+          storage_path: originalImage.signedUrl,
+          position: (images?.length ?? 0) + 1,
+          label: "AI 合成前原圖",
+        },
+      ]
+    : images ?? [];
   return <>
     <SiteHeader nickname={profile?.nickname} />
-    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><ImageCarousel images={images ?? []} alt={`${entry.character_name} Cos 作品`} /><span>作品 {entry.entry_code ?? `#${entry.id}`}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{showAuthor ? owner?.nickname : "匿名參賽者"}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>此作品使用 AI 合成背景，原圖已提供管理員查核。</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p><small>登入後可回到首頁投票。</small></article></section></main>
+    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><ImageCarousel images={galleryImages} alt={`${entry.character_name} Cos 作品`} /><span>作品 {entry.entry_code ?? `#${entry.id}`}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{showAuthor ? owner?.nickname : "匿名參賽者"}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>{originalImage?.signedUrl ? "此作品使用 AI 合成背景，作品相簿最後一張為合成前原圖。" : "此作品使用 AI 合成背景，原圖暫時無法載入。"}</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p><small>登入後可回到首頁投票。</small></article></section></main>
     <SiteFooter />
   </>;
 }

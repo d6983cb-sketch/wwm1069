@@ -11,7 +11,7 @@ export default function ImageCarousel({
   href,
   compact = false,
 }: {
-  images: Array<Partial<SubmissionImageRecord> & { storage_path: string }>;
+  images: Array<Partial<SubmissionImageRecord> & { storage_path: string; label?: string }>;
   alt: string;
   href?: string;
   compact?: boolean;
@@ -50,8 +50,8 @@ export default function ImageCarousel({
             />
           );
           return href
-            ? <Link href={href} className="carousel-slide" key={`${image.storage_path}-${index}`} draggable={false}>{picture}</Link>
-            : <div className="carousel-slide" key={`${image.storage_path}-${index}`}>{picture}</div>;
+            ? <Link href={href} className="carousel-slide" key={`${image.storage_path}-${index}`} draggable={false}>{picture}{image.label && <span className="carousel-badge">{image.label}</span>}</Link>
+            : <div className="carousel-slide" key={`${image.storage_path}-${index}`}>{picture}{image.label && <span className="carousel-badge">{image.label}</span>}</div>;
         })}
       </div>
       {safeImages.length > 1 && (

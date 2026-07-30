@@ -8,6 +8,8 @@ import { canShowAwards, type SubmissionImageRecord } from "@/lib/types";
 import { calculateAwardRanking, isTieHandling } from "@/lib/award-ranking";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
+  type EntryImageDisplaySetting,
   type EntryImageRevision,
 } from "@/lib/submission-corrections";
 
@@ -63,7 +65,7 @@ export default async function AwardsPage() {
       { data: exclusions },
     ] = await Promise.all([
       ids.length ? admin.from("votes").select("entry_id,created_at").in("entry_id", ids) : Promise.resolve({ data: [] }),
-      ids.length ? admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", ids).eq("position", 1) : Promise.resolve({ data: [] }),
+      ids.length ? admin.from("entry_images").select("id,entry_id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").in("entry_id", ids) : Promise.resolve({ data: [] }),
       ownerIds.length ? admin.from("profiles").select("id,nickname,is_disqualified").in("id", ownerIds) : Promise.resolve({ data: [] }),
       admin.from("award_rules").select("*").eq("event_id", event.id).maybeSingle(),
       admin.from("awards").select("*").eq("event_id", event.id).eq("is_archived", false).order("sort_order"),
@@ -72,15 +74,20 @@ export default async function AwardsPage() {
     ]);
     const tieHandling = isTieHandling(rules?.tie_handling) ? rules.tie_handling : "joint";
     const imageIds = (images ?? []).map((image) => image.id);
-    const { data: imageRevisions } = imageIds.length
-      ? await admin.from("entry_image_revisions")
-          .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
-          .in("image_id", imageIds)
-          .eq("is_active", true)
-      : { data: [] };
-    const displayedImages = applyActiveImageRevisions(
-      images ?? [],
-      imageRevisions as EntryImageRevision[] | null,
+    const [{ data: imageRevisions }, { data: displaySettings }] = imageIds.length
+      ? await Promise.all([
+          admin.from("entry_image_revisions")
+            .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+            .in("image_id", imageIds)
+            .eq("is_active", true),
+          admin.from("entry_image_display_settings")
+            .select("image_id,entry_id,display_position,is_hidden")
+            .in("image_id", imageIds),
+        ])
+      : [{ data: [] }, { data: [] }];
+    const displayedImages = applyImageDisplaySettings(
+      applyActiveImageRevisions(images ?? [], imageRevisions as EntryImageRevision[] | null),
+      displaySettings as EntryImageDisplaySetting[] | null,
     );
     const source = (entries ?? []).filter(
       (entry) => !owners?.find((owner) => owner.id === entry.owner_id)?.is_disqualified,

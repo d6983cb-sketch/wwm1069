@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/server";
 import { normalizeSubmissionImage, type EntryRecord, type EventRecord } from "@/lib/types";
 import {
   applyActiveImageRevisions,
+  applyImageDisplaySettings,
+  type EntryImageDisplaySetting,
   type EntryImageRevision,
 } from "@/lib/submission-corrections";
 
@@ -42,15 +44,20 @@ export default async function HomePage() {
       ? event?.voting_identity_mode !== "anonymous"
       : event?.submission_identity_mode !== "anonymous";
   const imageIds = (images ?? []).map((image) => image.id);
-  const { data: imageRevisions } = imageIds.length
-    ? await admin.from("entry_image_revisions")
-        .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
-        .in("image_id", imageIds)
-        .eq("is_active", true)
-    : { data: [] };
-  const displayedImages = applyActiveImageRevisions(
-    images ?? [],
-    imageRevisions as EntryImageRevision[] | null,
+  const [{ data: imageRevisions }, { data: displaySettings }] = imageIds.length
+    ? await Promise.all([
+        admin.from("entry_image_revisions")
+          .select("id,entry_id,image_id,display_storage_path,crop_x,crop_y,zoom,rotation,aspect_ratio,is_active,created_at")
+          .in("image_id", imageIds)
+          .eq("is_active", true),
+        admin.from("entry_image_display_settings")
+          .select("image_id,entry_id,display_position,is_hidden")
+          .in("image_id", imageIds),
+      ])
+    : [{ data: [] }, { data: [] }];
+  const displayedImages = applyImageDisplaySettings(
+    applyActiveImageRevisions(images ?? [], imageRevisions as EntryImageRevision[] | null),
+    displaySettings as EntryImageDisplaySetting[] | null,
   );
   const entries: EntryRecord[] = (rawEntries ?? []).filter((entry) =>
     !profiles?.find((item) => item.id === entry.owner_id)?.is_disqualified

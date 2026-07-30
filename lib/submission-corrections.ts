@@ -5,6 +5,11 @@ export type SubmissionEditGrant = {
   entry_id: number;
   grantee_profile_id: string;
   allowed_positions: number[];
+  allowed_image_ids: number[];
+  allow_add_images: boolean;
+  allow_replace_original: boolean;
+  allow_reorder_images: boolean;
+  allow_remove_images: boolean;
   reason: string | null;
   expires_at: string;
   is_active: boolean;
@@ -24,6 +29,13 @@ export type EntryImageRevision = {
   aspect_ratio: string;
   is_active: boolean;
   created_at: string;
+};
+
+export type EntryImageDisplaySetting = {
+  image_id: number;
+  entry_id: number;
+  display_position: number;
+  is_hidden: boolean;
 };
 
 export function isGrantUsable(
@@ -63,4 +75,22 @@ export function applyActiveImageRevisions<
       aspect_ratio: revision.aspect_ratio,
     };
   });
+}
+
+export function applyImageDisplaySettings<
+  T extends SubmissionImageRecord & { entry_id?: number },
+>(
+  images: T[],
+  settings: EntryImageDisplaySetting[] | null | undefined,
+): T[] {
+  const settingByImage = new Map(
+    (settings ?? []).map((setting) => [setting.image_id, setting]),
+  );
+  return images
+    .filter((image) => !settingByImage.get(image.id)?.is_hidden)
+    .map((image) => ({
+      ...image,
+      position: settingByImage.get(image.id)?.display_position ?? image.position,
+    }))
+    .sort((left, right) => left.position - right.position || left.id - right.id);
 }

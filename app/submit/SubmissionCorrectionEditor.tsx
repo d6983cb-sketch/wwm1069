@@ -293,7 +293,7 @@ export default function SubmissionCorrectionEditor({
   };
 
   return (
-    <section className="submission-correction">
+    <section className="submission-correction" id="submission-correction">
       <header>
         <small>SPECIAL CORRECTION · 指定作品修正</small>
         <h3>管理員已開放照片修正</h3>

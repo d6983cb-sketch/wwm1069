@@ -25,6 +25,7 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
   ]);
   if (!entry) notFound();
   const { data: event } = await admin.from("events").select("leaderboard_mode,status,submission_identity_mode,voting_identity_mode,reveal_authors_after_results").eq("id", entry.event_id).single();
+  const isOwner = user?.id === entry.owner_id;
   const { data: originalRevision } = await admin
     .from("entry_original_image_revisions")
     .select("storage_object_path")
@@ -32,7 +33,7 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
     .eq("is_active", true)
     .maybeSingle();
   const activeOriginalPath = originalRevision?.storage_object_path ?? entry.original_image_path;
-  const [{ data: owner }, { data: images }, voteResult, originalResult] = await Promise.all([
+  const [{ data: owner }, { data: images }, voteResult, originalResult, { data: correctionGrant }] = await Promise.all([
     admin.from("profiles").select("nickname,is_disqualified").eq("id", entry.owner_id).single(),
     admin.from("entry_images").select("id,storage_path,position,crop_x,crop_y,zoom,rotation,aspect_ratio").eq("entry_id", entry.id).order("position"),
     event?.leaderboard_mode === "hidden"
@@ -40,6 +41,18 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
       : admin.from("votes").select("*", { count: "exact", head: true }).eq("entry_id", entry.id),
     entry.uses_ai_background && activeOriginalPath
       ? admin.storage.from("cos-originals").createSignedUrl(activeOriginalPath, 60 * 60)
+      : Promise.resolve({ data: null }),
+    isOwner
+      ? admin.from("submission_edit_grants")
+          .select("id")
+          .eq("entry_id", entry.id)
+          .eq("grantee_profile_id", entry.owner_id)
+          .eq("is_active", true)
+          .is("revoked_at", null)
+          .gt("expires_at", new Date().toISOString())
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
   if (owner?.is_disqualified) notFound();
@@ -80,7 +93,7 @@ export default async function EntryPage({ params }: { params: Promise<{ id: stri
     : displayedImages;
   return <>
     <SiteHeader nickname={profile?.nickname} />
-    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><ImageCarousel images={galleryImages} alt={`${entry.character_name} Cos 作品`} /><span>作品 {entry.entry_code ?? `#${entry.id}`}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{showAuthor ? owner?.nickname : "匿名參賽者"}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>{originalImage?.signedUrl ? "此作品使用 AI 合成背景，作品相簿最後一張為合成前原圖。" : "此作品使用 AI 合成背景，原圖暫時無法載入。"}</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p><small>登入後可回到首頁投票。</small></article></section></main>
+    <main className="inner"><Link className="back" href="/">← 返回作品展廳</Link><section className="detail"><div><ImageCarousel images={galleryImages} alt={`${entry.character_name} Cos 作品`} /><span>作品 {entry.entry_code ?? `#${entry.id}`}</span></div><article><small>ENTRY · 獨立作品頁</small><h1>{entry.character_name}</h1><b>角色來源 · {entry.source_game}</b><h2>投稿者　{showAuthor ? owner?.nickname : "匿名參賽者"}</h2><p>{entry.description || "投稿者沒有填寫作品介紹。"}</p>{entry.uses_ai_background && <aside>{originalImage?.signedUrl ? "此作品使用 AI 合成背景，作品相簿最後一張為合成前原圖。" : "此作品使用 AI 合成背景，原圖暫時無法載入。"}</aside>}<p>{event?.leaderboard_mode === "hidden" ? "♥ 已獲得支持" : `♥ ${count ?? 0} 票`}</p>{correctionGrant && <div className="entry-owner-actions"><Link className="primary entry-edit-link" href="/submit#submission-correction">編輯作品圖片</Link><small>此按鈕僅投稿者本人於修正授權有效期間可見。</small></div>}<small>登入後可回到首頁投票。</small></article></section></main>
     <SiteFooter />
   </>;
 }

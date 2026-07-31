@@ -118,6 +118,19 @@ test("AI background originals are appended to the public entry gallery with a si
   assert.match(nextConfig, /pathname:\s*"\/storage\/v1\/object\/sign\/\*\*"/);
 });
 
+test("an active correction grant exposes an owner-only edit link on the entry page", async () => {
+  const entryPage = await readFile(new URL("../app/entry/[id]/page.tsx", import.meta.url), "utf8");
+  const editor = await readFile(new URL("../app/submit/SubmissionCorrectionEditor.tsx", import.meta.url), "utf8");
+  assert.match(entryPage, /const isOwner = user\?\.id === entry\.owner_id/);
+  assert.match(entryPage, /\.eq\("grantee_profile_id", entry\.owner_id\)/);
+  assert.match(entryPage, /\.eq\("is_active", true\)/);
+  assert.match(entryPage, /\.is\("revoked_at", null\)/);
+  assert.match(entryPage, /\.gt\("expires_at", new Date\(\)\.toISOString\(\)\)/);
+  assert.match(entryPage, /href="\/submit#submission-correction"/);
+  assert.match(entryPage, /編輯作品圖片/);
+  assert.match(editor, /id="submission-correction"/);
+});
+
 test("permanent deletion is super-admin-only and requires typed confirmation", async () => {
   const route = await readFile(
     new URL("../app/api/admin/entries/[id]/route.ts", import.meta.url),

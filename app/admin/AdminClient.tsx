@@ -489,6 +489,7 @@ export default function AdminClient({
           {tab.label}
         </button>
       ))}
+      {(can("event_manager") || can("submission_manager")) && <a className="admin-hunt-link" href="/admin/hunt">尋物活動</a>}
     </aside>
   );
 

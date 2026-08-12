@@ -37,6 +37,7 @@ export default function SiteHeader({ nickname }: { nickname?: string | null }) {
       <Link className="brand" href="/">江湖百相錄 <i>百相</i></Link>
       <nav>
         <Link className={pathname === "/" ? "active" : ""} href="/">作品</Link>
+        <Link className={pathname.startsWith("/hunt") ? "active" : ""} href="/hunt">尋物活動</Link>
         <Link className={pathname === "/rules" ? "active" : ""} href="/rules">活動規則</Link>
         <Link className={pathname === "/awards" ? "active" : ""} href="/awards">頒獎頁</Link>
         {nickname && <Link className={pathname === "/notifications" ? "active" : ""} href="/notifications">通知{unreadCount > 0 && <span className="notice-badge" aria-label={`${unreadCount} 則未讀`}>{unreadCount > 99 ? "99+" : unreadCount}</span>}</Link>}

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 import { createClient } from "@/lib/supabase/browser";
 import { compressReplacementPhoto, validateReplacementPhoto, withUploadTimeout } from "@/lib/client-image-upload";
@@ -16,6 +16,82 @@ type ReviewRow = HuntSubmissionRecord & {
 };
 
 const statusLabels = { pending: "待審核", correct: "正確", incorrect: "錯誤", duplicate: "重複" };
+
+type ReferencePreview = {
+  id: string;
+  file: File;
+  url: string;
+};
+
+function replaceInputFiles(input: HTMLInputElement | null, previews: ReferencePreview[]) {
+  if (!input) return;
+  const transfer = new DataTransfer();
+  for (const preview of previews) transfer.items.add(preview.file);
+  input.files = transfer.files;
+}
+
+function ReferenceImagePicker({ disabled, compact = false }: { disabled: boolean; compact?: boolean }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const previewsRef = useRef<ReferencePreview[]>([]);
+  const [previews, setPreviews] = useState<ReferencePreview[]>([]);
+  const [selectionMessage, setSelectionMessage] = useState("");
+
+  useEffect(() => {
+    previewsRef.current = previews;
+  }, [previews]);
+  useEffect(() => () => {
+    for (const preview of previewsRef.current) URL.revokeObjectURL(preview.url);
+  }, []);
+
+  const selectFiles = (fileList: FileList | null) => {
+    for (const preview of previews) URL.revokeObjectURL(preview.url);
+    const files = Array.from(fileList ?? []);
+    const accepted: ReferencePreview[] = [];
+    const errors: string[] = [];
+    for (const file of files.slice(0, 10)) {
+      const validation = validateReplacementPhoto(file);
+      if (validation) errors.push(`${file.name}：${validation}`);
+      else accepted.push({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) });
+    }
+    if (files.length > 10) errors.push("每次最多選擇 10 張照片。");
+    replaceInputFiles(inputRef.current, accepted);
+    setPreviews(accepted);
+    setSelectionMessage(errors.length ? errors.join(" ") : accepted.length ? `已選擇 ${accepted.length} 張` : "尚未選擇照片");
+  };
+
+  const removePreview = (id: string) => {
+    const removed = previews.find((preview) => preview.id === id);
+    if (removed) URL.revokeObjectURL(removed.url);
+    const next = previews.filter((preview) => preview.id !== id);
+    replaceInputFiles(inputRef.current, next);
+    setPreviews(next);
+    setSelectionMessage(next.length ? `已選擇 ${next.length} 張` : "尚未選擇照片");
+  };
+
+  return <div className={`hunt-reference-picker${compact ? " compact" : ""}`}>
+    <label className="hunt-file">
+      <span>{compact ? "選擇更多輔助辨識照片" : "選擇 1–10 張參考圖"}</span>
+      <small>{previews.length ? `已選 ${previews.length} 張，可再次選擇以更換` : compact ? "不會覆蓋原有照片，選取後立即預覽" : "選取後會立即顯示預覽"}</small>
+      <input
+        ref={inputRef}
+        name="referenceFiles"
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        multiple
+        required
+        disabled={disabled}
+        onChange={(event) => selectFiles(event.currentTarget.files)}
+      />
+    </label>
+    {selectionMessage && <small className="hunt-reference-selection-message" aria-live="polite">{selectionMessage}</small>}
+    {previews.length > 0 && <div className="hunt-reference-previews" aria-label="準備上傳的參考圖預覽">
+      {previews.map((preview, index) => <figure key={preview.id}>
+        <Image src={preview.url} width={180} height={135} alt={`參考圖預覽 ${index + 1}`} unoptimized />
+        <figcaption><span title={preview.file.name}>第 {index + 1} 張 · {preview.file.name}</span><button type="button" disabled={disabled} onClick={() => removePreview(preview.id)}>移除</button></figcaption>
+      </figure>)}
+    </div>}
+  </div>;
+}
 
 function defaultInput(offsetDays: number) {
   return toTaipeiInput(new Date(Date.now() + offsetDays * 86400000).toISOString());
@@ -76,15 +152,17 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     });
   };
 
-  const uploadReferences = async (formEvent: FormEvent<HTMLFormElement>) => {
+  const uploadReferences = async (formEvent: FormEvent<HTMLFormElement>, fixedTargetNumber?: number) => {
     formEvent.preventDefault();
     if (!event) return setMessage("請先建立尋物活動。");
     const form = new FormData(formEvent.currentTarget);
-    const targetNumber = Number(form.get("targetNumber"));
-    const label = String(form.get("label") ?? "");
+    const targetNumber = fixedTargetNumber ?? Number(form.get("targetNumber"));
+    const label = fixedTargetNumber == null ? String(form.get("label") ?? "") : "";
     const input = formEvent.currentTarget.elements.namedItem("referenceFiles") as HTMLInputElement | null;
-    const files = [...(input?.files ?? [])].slice(0, 5);
+    const selectedFiles = [...(input?.files ?? [])];
+    const files = selectedFiles.slice(0, 10);
     if (!files.length) return setMessage("請至少選擇一張點位參考圖。");
+    if (selectedFiles.length > 10) return setMessage("每次最多新增 10 張輔助辨識照片。");
     setBusy(true);
     setMessage("正在建立圖片辨識索引，請勿關閉頁面…");
     try {
@@ -120,6 +198,16 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveReferencePoint = async (formEvent: FormEvent<HTMLFormElement>, referencePointId: string) => {
+    formEvent.preventDefault();
+    const form = new FormData(formEvent.currentTarget);
+    await action({
+      type: "hunt_reference_point_update",
+      referencePointId,
+      label: form.get("label"),
+    });
   };
 
   const review = async (formEvent: FormEvent<HTMLFormElement>, submissionId: number) => {
@@ -170,12 +258,22 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
       <form onSubmit={uploadReferences}>
         <label>點位<select name="targetNumber" required>{Array.from({ length: event.total_targets }, (_, index) => index + 1).map((number) => <option value={number} key={number}>H{String(number).padStart(3, "0")}</option>)}</select></label>
         <label>點位名稱（選填）<input name="label" maxLength={100} placeholder="例如：竹林入口石牆" /></label>
-        <label className="hunt-file"><span>選擇 1–5 張參考圖</span><input name="referenceFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple required /></label>
+        <ReferenceImagePicker disabled={busy || !aiConfigured} />
         <button className="primary" disabled={busy || !aiConfigured}>{busy ? "建立索引中…" : "上傳並建立辨識索引"}</button>
       </form>
       <div className="hunt-reference-grid">
         {referencePoints.length ? referencePoints.map((point) => <article key={point.id}>
           <header><b>H{String(point.target_number).padStart(3, "0")}</b><span>{point.label || "未命名點位"}</span><small>{point.images.filter((image) => image.is_active).length} 張啟用</small></header>
+          <div className="hunt-reference-point-tools">
+            <form onSubmit={(formEvent) => saveReferencePoint(formEvent, point.id)}>
+              <label>點位名稱<input name="label" maxLength={100} defaultValue={point.label ?? ""} placeholder="例如：竹林入口石牆" /></label>
+              <button type="submit" disabled={busy}>儲存名稱</button>
+            </form>
+            <form onSubmit={(formEvent) => uploadReferences(formEvent, point.target_number)}>
+              <ReferenceImagePicker compact disabled={busy || !aiConfigured} />
+              <button type="submit" className="primary" disabled={busy || !aiConfigured}>{busy ? "建立索引中…" : "新增照片並建立索引"}</button>
+            </form>
+          </div>
           <div>{point.images.map((reference) => <figure key={reference.id} className={reference.is_active ? "" : "inactive"}>
             {reference.signedUrl ? <Image src={reference.signedUrl} width={240} height={180} alt={`H${point.target_number} 參考圖`} unoptimized /> : <span>圖片無法載入</span>}
             <figcaption><span>{reference.is_active ? "啟用" : "已停用"}</span><div>

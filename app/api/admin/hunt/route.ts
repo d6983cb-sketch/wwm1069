@@ -99,6 +99,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, path: imagePath, token: data.token });
   }
 
+  if (type === "hunt_reference_point_update") {
+    const referencePointId = String(body.referencePointId ?? "");
+    const label = String(body.label ?? "").trim();
+    if (!referencePointId || label.length > 100) {
+      return json("invalid_reference_point", "點位名稱最多 100 字。", 400);
+    }
+    const { data: before } = await admin
+      .from("hunt_reference_points")
+      .select("*")
+      .eq("id", referencePointId)
+      .maybeSingle();
+    if (!before) return json("reference_point_not_found", "找不到這個辨識點位。", 404);
+    const { data: event } = await admin
+      .from("hunt_events")
+      .select("id,status")
+      .eq("id", before.hunt_event_id)
+      .maybeSingle();
+    if (!event) return json("event_not_found", "找不到尋物活動。", 404);
+    if (event.status === "archived") return json("event_archived", "活動已封存，不能編輯辨識點位。", 422);
+    const { data: after, error } = await admin
+      .from("hunt_reference_points")
+      .update({
+        label: label || null,
+        updated_by: context.profile.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", before.id)
+      .select("*")
+      .single();
+    if (error || !after) return json("reference_point_update_failed", "點位名稱儲存失敗，原資料未變更。", 500);
+    await writeAuditLog({
+      context,
+      actionType: "hunt_reference_point_update",
+      targetType: "hunt_reference_point",
+      targetId: before.id,
+      beforeData: before,
+      afterData: after,
+    });
+    return NextResponse.json({ ok: true, message: `H${String(after.target_number).padStart(3, "0")} 點位名稱已儲存。` });
+  }
+
   if (type === "hunt_reference_create") {
     const eventId = String(body.eventId ?? "");
     const targetNumber = Number(body.targetNumber);
@@ -117,15 +158,29 @@ export async function POST(request: Request) {
       const { data: image, error: downloadError } = await admin.storage.from("hunt-references").download(imagePath);
       if (downloadError || !image) throw new Error("reference_download_failed");
       const embedding = await embedHuntImage(image);
-      const { data: point, error: pointError } = await admin.from("hunt_reference_points").upsert({
-        hunt_event_id: event.id,
-        target_number: targetNumber,
-        label: label || null,
-        is_active: true,
-        created_by: context.profile.id,
-        updated_by: context.profile.id,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "hunt_event_id,target_number" }).select("*").single();
+      const { data: existingPoint, error: pointLookupError } = await admin
+        .from("hunt_reference_points")
+        .select("*")
+        .eq("hunt_event_id", event.id)
+        .eq("target_number", targetNumber)
+        .maybeSingle();
+      if (pointLookupError) throw new Error("reference_point_lookup_failed");
+      const pointQuery = existingPoint
+        ? admin.from("hunt_reference_points").update({
+          ...(label ? { label } : {}),
+          is_active: true,
+          updated_by: context.profile.id,
+          updated_at: new Date().toISOString(),
+        }).eq("id", existingPoint.id)
+        : admin.from("hunt_reference_points").insert({
+          hunt_event_id: event.id,
+          target_number: targetNumber,
+          label: label || null,
+          is_active: true,
+          created_by: context.profile.id,
+          updated_by: context.profile.id,
+        });
+      const { data: point, error: pointError } = await pointQuery.select("*").single();
       if (pointError || !point) throw new Error("reference_point_failed");
       const { data: created, error: imageError } = await admin.from("hunt_reference_images").insert({
         reference_point_id: point.id,

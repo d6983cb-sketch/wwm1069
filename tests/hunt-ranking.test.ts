@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { calculateHuntProgress, calculateHuntRanking, canShowHuntRanking, isHuntOpen, type HuntEventRecord } from "../lib/hunt.ts";
-import { classifyHuntMatches } from "../lib/hunt-ai.ts";
+import { classifyHuntMatches, fetchHuntAiWith429Retry, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -41,6 +41,45 @@ test("automatic matching requires both threshold and a clear lead", () => {
     { target_number: 1, similarity: 0.84 },
     { target_number: 2, similarity: 0.82 },
   ], 0.78, 0.04).status, "uncertain");
+});
+
+test("hunt AI retries exactly three times after HTTP 429", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const response = await fetchHuntAiWith429Retry("https://example.test", {}, {
+    fetcher: async () => {
+      calls += 1;
+      return new Response(null, { status: calls <= HUNT_AI_MAX_429_RETRIES ? 429 : 200 });
+    },
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    random: () => 0,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 4);
+  assert.deepEqual(delays, [1_000, 2_000, 4_000]);
+});
+
+test("hunt AI queue runs recognition jobs one at a time", async () => {
+  const events: string[] = [];
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const first = withHuntAiQueue(async () => {
+    events.push("first:start");
+    await firstGate;
+    events.push("first:end");
+  });
+  const second = withHuntAiQueue(async () => {
+    events.push("second:start");
+    events.push("second:end");
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  try {
+    assert.deepEqual(events, ["first:start"]);
+  } finally {
+    releaseFirst();
+  }
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
 });
 
 test("provisional count is distinct and never replaces manual truth", () => {
@@ -122,4 +161,25 @@ test("players can delete only their own unconfirmed hunt submissions while the h
   assert.match(route, /storage\.from\("hunt-proofs"\)\.remove/);
   assert.match(client, /刪除這筆錯誤投稿/);
   assert.match(client, /method: "DELETE"/);
+});
+
+test("administrators can edit a reference point and append helper images without replacing its label", () => {
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/admin/hunt/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/admin/hunt/HuntAdminClient.tsx"),
+    "utf8",
+  );
+  assert.match(route, /type === "hunt_reference_point_update"/);
+  assert.match(route, /actionType: "hunt_reference_point_update"/);
+  assert.match(route, /\.\.\.\(label \? \{ label \} : \{\}\)/);
+  assert.match(client, /新增照片並建立索引/);
+  assert.match(client, /不會覆蓋原有照片/);
+  assert.match(client, /saveReferencePoint/);
+  assert.match(client, /function ReferenceImagePicker/);
+  assert.match(client, /URL\.createObjectURL/);
+  assert.match(client, /replaceInputFiles\(inputRef\.current, next\)/);
+  assert.match(client, /準備上傳的參考圖預覽/);
 });

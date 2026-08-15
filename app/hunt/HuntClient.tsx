@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/browser";
 import {
@@ -14,6 +14,16 @@ import {
 import { calculateHuntProgress, canShowHuntRanking, isHuntOpen, type HuntEventRecord, type HuntRankingRow, type HuntSubmissionRecord } from "@/lib/hunt";
 
 type OwnSubmission = HuntSubmissionRecord & { signedUrl: string | null };
+type PendingPhotoStatus = "ready" | "processing" | "success" | "error";
+type PendingPhoto = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  status: PendingPhotoStatus;
+  message: string;
+};
+
+const MAX_BATCH_PHOTOS = 22;
 
 const statusLabels = {
   pending: "等待審核",
@@ -43,14 +53,21 @@ export default function HuntClient({
   ranking: HuntRankingRow[];
 }) {
   const router = useRouter();
-  const [file, setFile] = useState<File | null>(null);
+  const [photos, setPhotos] = useState<PendingPhoto[]>([]);
+  const photosRef = useRef<PendingPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
+  const progressKey = submissions.map((submission) => `${submission.id}:${submission.status}:${submission.auto_status}`).join("|");
+  const calculatedProgress = calculateHuntProgress(submissions);
+  const [optimisticProgress, setOptimisticProgress] = useState<{ key: string; value: ReturnType<typeof calculateHuntProgress> } | null>(null);
+  const liveProgress = optimisticProgress?.key === progressKey ? optimisticProgress.value : calculatedProgress;
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
   useEffect(() => () => {
-    if (preview) URL.revokeObjectURL(preview);
-  }, [preview]);
+    for (const photo of photosRef.current) URL.revokeObjectURL(photo.previewUrl);
+  }, []);
   const open = isHuntOpen(event);
 
   const signIn = async () => {
@@ -64,54 +81,117 @@ export default function HuntClient({
     });
   };
 
+  const selectPhotos = (fileList: FileList | null) => {
+    if (!fileList?.length || busy) return;
+    const selected = Array.from(fileList);
+    const existing = new Set(photos.map((photo) => `${photo.file.name}:${photo.file.size}:${photo.file.lastModified}`));
+    const available = Math.max(0, MAX_BATCH_PHOTOS - photos.length);
+    const nextPhotos: PendingPhoto[] = [];
+    const errors: string[] = [];
+
+    for (const file of selected.slice(0, available)) {
+      const fingerprint = `${file.name}:${file.size}:${file.lastModified}`;
+      if (existing.has(fingerprint)) continue;
+      const validation = validateReplacementPhoto(file);
+      if (validation) {
+        errors.push(`${file.name}：${validation}`);
+        continue;
+      }
+      existing.add(fingerprint);
+      nextPhotos.push({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "ready",
+        message: "等待送出",
+      });
+    }
+
+    setPhotos((current) => [...current, ...nextPhotos]);
+    if (selected.length > available) errors.push(`每次最多選擇 ${MAX_BATCH_PHOTOS} 張照片。`);
+    setMessage(errors.length ? errors.join(" ") : nextPhotos.length ? `已選擇 ${photos.length + nextPhotos.length} 張照片。` : "沒有新增照片。");
+  };
+
+  const removePendingPhoto = (id: string) => {
+    if (busy) return;
+    setPhotos((current) => {
+      const removed = current.find((photo) => photo.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((photo) => photo.id !== id);
+    });
+  };
+
+  const updatePendingPhoto = (id: string, update: Partial<Pick<PendingPhoto, "status" | "message">>) => {
+    setPhotos((current) => current.map((photo) => photo.id === id ? { ...photo, ...update } : photo));
+  };
+
   const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
-    if (!file || !userId || !event) return;
+    const queuedPhotos = photos.filter((photo) => photo.status !== "success");
+    if (!queuedPhotos.length || !userId || !event) return;
     // React's currentTarget is only guaranteed while the event handler is
     // running synchronously. Read the form before image compression/upload;
     // otherwise currentTarget can be null by the time the awaited work ends.
     const form = new FormData(formEvent.currentTarget);
     const playerNote = String(form.get("playerNote") ?? "");
-    const validation = validateReplacementPhoto(file);
-    if (validation) return setMessage(validation);
     setBusy(true);
-    setMessage("正在處理照片…");
-    let imagePath: string | null = null;
-    try {
-      const compressed = await compressReplacementPhoto(file, "image/jpeg");
-      const fileHash = await sha256(compressed);
-      imagePath = `${userId}/${crypto.randomUUID()}-proof.${replacementFileExtension(compressed)}`;
-      const supabase = createClient();
-      const { error: uploadError } = await withUploadTimeout(
-        supabase.storage.from("hunt-proofs").upload(imagePath, compressed, { upsert: false, contentType: compressed.type }),
-        "upload_timeout",
-      );
-      if (uploadError) throw uploadError;
-      const response = await fetch("/api/hunt/submissions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ imagePath, fileHash, playerNote }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.message || body.error || "submission_failed");
-      setFile(null);
-      setPreview(null);
-      setMessage(body.message ?? "照片已送出，等待審核。");
-      router.refresh();
-    } catch (error) {
-      console.error("[hunt-upload] submission failed", {
-        stage: imagePath ? "create-record" : "upload-proof",
-        error,
-      });
-      const fallback = replacementUploadError(error);
-      setMessage(error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)
-        ? error.message
-        : fallback === "照片修正失敗，原作品仍保持不變。"
-          ? "尋物照片上傳失敗，請重新整理後再試一次。"
-          : fallback);
-    } finally {
-      setBusy(false);
+    setMessage(`正在依序處理 1 / ${queuedPhotos.length} 張…`);
+    const completedIds = new Set<string>();
+    let completed = 0;
+    let failed = 0;
+
+    for (const [index, photo] of queuedPhotos.entries()) {
+      let imagePath: string | null = null;
+      updatePendingPhoto(photo.id, { status: "processing", message: event.auto_match_enabled ? "上傳並排隊辨識中…" : "上傳中…" });
+      setMessage(`正在依序處理 ${index + 1} / ${queuedPhotos.length} 張…`);
+      try {
+        const compressed = await compressReplacementPhoto(photo.file, "image/jpeg");
+        const fileHash = await sha256(compressed);
+        imagePath = `${userId}/${crypto.randomUUID()}-proof.${replacementFileExtension(compressed)}`;
+        const supabase = createClient();
+        const { error: uploadError } = await withUploadTimeout(
+          supabase.storage.from("hunt-proofs").upload(imagePath, compressed, { upsert: false, contentType: compressed.type }),
+          "upload_timeout",
+        );
+        if (uploadError) throw uploadError;
+        const response = await fetch("/api/hunt/submissions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ imagePath, fileHash, playerNote }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.message || body.error || "submission_failed");
+        completed += 1;
+        completedIds.add(photo.id);
+        updatePendingPhoto(photo.id, { status: "success", message: body.message ?? "已送出" });
+        if (body.progress) setOptimisticProgress({ key: progressKey, value: body.progress });
+      } catch (error) {
+        failed += 1;
+        console.error("[hunt-upload] submission failed", {
+          stage: imagePath ? "create-record" : "upload-proof",
+          fileName: photo.file.name,
+          error,
+        });
+        const fallback = replacementUploadError(error);
+        const errorMessage = error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)
+          ? error.message
+          : fallback === "照片修正失敗，原作品仍保持不變。"
+            ? "尋物照片上傳失敗，請稍後重試。"
+            : fallback;
+        updatePendingPhoto(photo.id, { status: "error", message: errorMessage });
+      }
     }
+
+    setBusy(false);
+    setMessage(failed
+      ? `批次處理完成：成功 ${completed} 張、失敗 ${failed} 張。失敗照片仍保留，可再次送出。`
+      : `${completed} 張照片已全部送出並完成自動辨識。`);
+    setPhotos((current) => current.filter((photo) => {
+      if (!completedIds.has(photo.id)) return true;
+      URL.revokeObjectURL(photo.previewUrl);
+      return false;
+    }));
+    router.refresh();
   };
 
   const removeSubmission = async (submission: OwnSubmission) => {
@@ -139,7 +219,6 @@ export default function HuntClient({
     return <div className="empty-state"><i>尋</i><h3>尋物活動尚未建立</h3><p>管理員完成設定後會在此開放。</p></div>;
   }
 
-  const progress = calculateHuntProgress(submissions);
   return (
     <>
       <header className="page-title hunt-title">
@@ -161,8 +240,8 @@ export default function HuntClient({
           <h2>活動資訊</h2>
           <dl>
             <div><dt>藏物總數</dt><dd>{event.total_targets}</dd></div>
-            <div><dt>暫定找到</dt><dd>{progress.provisionalCount}</dd></div>
-            <div><dt>人工確認</dt><dd>{progress.confirmedCount}</dd></div>
+            <div><dt>暫定找到</dt><dd>{liveProgress.provisionalCount}</dd></div>
+            <div><dt>人工確認</dt><dd>{liveProgress.confirmedCount}</dd></div>
             <div><dt>活動狀態</dt><dd>{open ? "進行中" : event.status === "results_published" ? "結果公布" : "未開放"}</dd></div>
           </dl>
           <p>每找到一個物品請上傳一張照片。自動辨識會立即更新暫定數量，最後仍以管理員人工審核為準。</p>
@@ -180,24 +259,22 @@ export default function HuntClient({
         ) : (
           <form onSubmit={submit}>
             <label className="hunt-file">
-              <span>{file ? "更換照片" : "選擇照片"}</span>
-              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => {
-                const next = event.target.files?.[0] ?? null;
-                if (next) {
-                  const validation = validateReplacementPhoto(next);
-                  if (validation) setMessage(validation);
-                  else {
-                    setFile(next);
-                    setPreview(URL.createObjectURL(next));
-                    setMessage("");
-                  }
-                }
+              <span>{photos.length ? `繼續選擇照片（已選 ${photos.length} 張）` : "選擇一張或多張照片"}</span>
+              <small>可從相簿一次選取，最多 {MAX_BATCH_PHOTOS} 張</small>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={busy} onChange={(event) => {
+                selectPhotos(event.target.files);
                 event.currentTarget.value = "";
               }} />
             </label>
-            {preview && <Image className="hunt-preview" src={preview} width={640} height={480} alt="準備上傳的尋物照片預覽" unoptimized />}
+            {photos.length > 0 && <div className="hunt-batch-preview" aria-label="準備上傳的照片">
+              {photos.map((photo, index) => <article key={photo.id} className={`hunt-batch-photo ${photo.status}`}>
+                <Image src={photo.previewUrl} width={240} height={180} alt={`準備上傳的尋物照片 ${index + 1}`} unoptimized />
+                <span><b>第 {index + 1} 張</b><small>{photo.message}</small></span>
+                <button type="button" disabled={busy} onClick={() => removePendingPhoto(photo.id)} aria-label={`移除第 ${index + 1} 張照片`}>移除</button>
+              </article>)}
+            </div>}
             <label>補充說明（選填）<textarea name="playerNote" maxLength={200} placeholder="例如：在樹叢旁、屋簷後方找到" /></label>
-            <button className="primary" disabled={busy || !file}>{busy ? (event.auto_match_enabled ? "自動辨識中…" : "正在送出…") : event.auto_match_enabled ? "送出並立即辨識" : "送出等待審核"}</button>
+            <button className="primary" disabled={busy || !photos.length}>{busy ? (event.auto_match_enabled ? "依序自動辨識中…" : "依序送出中…") : event.auto_match_enabled ? `送出 ${photos.length} 張並自動辨識` : `送出 ${photos.length} 張等待審核`}</button>
           </form>
         )}
         {message && <p className="hunt-message" role="status">{message}</p>}

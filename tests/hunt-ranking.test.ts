@@ -178,4 +178,8 @@ test("administrators can edit a reference point and append helper images without
   assert.match(client, /新增照片並建立索引/);
   assert.match(client, /不會覆蓋原有照片/);
   assert.match(client, /saveReferencePoint/);
+  assert.match(client, /function ReferenceImagePicker/);
+  assert.match(client, /URL\.createObjectURL/);
+  assert.match(client, /replaceInputFiles\(inputRef\.current, next\)/);
+  assert.match(client, /準備上傳的參考圖預覽/);
 });

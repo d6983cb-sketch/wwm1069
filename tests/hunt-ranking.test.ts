@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { calculateHuntProgress, calculateHuntRanking, canShowHuntRanking, isHuntOpen, type HuntEventRecord } from "../lib/hunt.ts";
-import { classifyHuntMatches } from "../lib/hunt-ai.ts";
+import { classifyHuntMatches, fetchHuntAiWith429Retry, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -41,6 +41,45 @@ test("automatic matching requires both threshold and a clear lead", () => {
     { target_number: 1, similarity: 0.84 },
     { target_number: 2, similarity: 0.82 },
   ], 0.78, 0.04).status, "uncertain");
+});
+
+test("hunt AI retries exactly three times after HTTP 429", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const response = await fetchHuntAiWith429Retry("https://example.test", {}, {
+    fetcher: async () => {
+      calls += 1;
+      return new Response(null, { status: calls <= HUNT_AI_MAX_429_RETRIES ? 429 : 200 });
+    },
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    random: () => 0,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 4);
+  assert.deepEqual(delays, [1_000, 2_000, 4_000]);
+});
+
+test("hunt AI queue runs recognition jobs one at a time", async () => {
+  const events: string[] = [];
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const first = withHuntAiQueue(async () => {
+    events.push("first:start");
+    await firstGate;
+    events.push("first:end");
+  });
+  const second = withHuntAiQueue(async () => {
+    events.push("second:start");
+    events.push("second:end");
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  try {
+    assert.deepEqual(events, ["first:start"]);
+  } finally {
+    releaseFirst();
+  }
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
 });
 
 test("provisional count is distinct and never replaces manual truth", () => {

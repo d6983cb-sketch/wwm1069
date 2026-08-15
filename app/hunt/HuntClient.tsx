@@ -45,6 +45,7 @@ export default function HuntClient({
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => () => {
@@ -110,6 +111,27 @@ export default function HuntClient({
           : fallback);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const removeSubmission = async (submission: OwnSubmission) => {
+    if (submission.status === "correct") return;
+    if (!confirm(`確定刪除尋物投稿 #${submission.id}？照片與審核紀錄會一併刪除，且無法復原。`)) return;
+    setDeletingId(submission.id);
+    setMessage("");
+    try {
+      const response = await fetch("/api/hunt/submissions", {
+        method: "DELETE",
+        headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
+        body: JSON.stringify({ submissionId: submission.id }),
+      });
+      const body = await response.json().catch(() => ({}));
+      setMessage(body.message ?? (response.ok ? "投稿已刪除。" : "刪除失敗。"));
+      if (response.ok) router.refresh();
+    } catch {
+      setMessage("網路連線失敗，投稿尚未刪除。");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -194,6 +216,12 @@ export default function HuntClient({
             {submission.status === "pending" && submission.auto_status === "error" && <span className="hunt-auto-player warning">自動辨識未完成<small>已轉人工審核，照片不需重傳</small></span>}
             {submission.review_note && <small>{submission.review_note}</small>}
             <time>{new Date(submission.submitted_at).toLocaleString("zh-TW")}</time>
+            {open && submission.status !== "correct" && <button
+              type="button"
+              className="hunt-delete"
+              disabled={busy || deletingId !== null}
+              onClick={() => removeSubmission(submission)}
+            >{deletingId === submission.id ? "刪除中…" : "刪除這筆錯誤投稿"}</button>}
           </article>)}
         </div> : <p className="muted">尚未上傳照片。</p>}
       </section>}

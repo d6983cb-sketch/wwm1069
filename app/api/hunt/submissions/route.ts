@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -138,4 +139,81 @@ export async function POST(request: Request) {
   const progress = calculateHuntProgress((currentRows ?? []) as Array<Pick<HuntSubmissionRecord, "status" | "matched_target_number" | "auto_status" | "auto_match_target_number">>);
 
   return NextResponse.json({ ok: true, message: autoMessage, submission: created, progress });
+}
+
+export async function DELETE(request: Request) {
+  const supabase = await createClient();
+  const admin = createAdminClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "unauthorized", message: "請先登入。" }, { status: 401 });
+
+  const body = await request.json().catch(() => ({}));
+  const submissionId = Number(body.submissionId);
+  if (!Number.isInteger(submissionId)) {
+    return NextResponse.json({ error: "invalid_submission", message: "尋物投稿編號不正確。" }, { status: 400 });
+  }
+
+  const [{ data: submission }, { data: profile }] = await Promise.all([
+    admin.from("hunt_submissions")
+      .select("id,hunt_event_id,profile_id,image_path,status,matched_target_number,submitted_at")
+      .eq("id", submissionId)
+      .maybeSingle(),
+    admin.from("profiles")
+      .select("id,discord_id,nickname")
+      .eq("id", user.id)
+      .maybeSingle(),
+  ]);
+  if (!profile) {
+    return NextResponse.json({ error: "profile_not_found", message: "找不到玩家資料。" }, { status: 404 });
+  }
+  if (!submission || submission.profile_id !== user.id) {
+    return NextResponse.json({ error: "submission_not_found", message: "找不到你的這筆尋物投稿。" }, { status: 404 });
+  }
+
+  const { data: event } = await admin
+    .from("hunt_events")
+    .select("id,status,starts_at,ends_at")
+    .eq("id", submission.hunt_event_id)
+    .maybeSingle();
+  if (!event || !isHuntOpen(event as HuntEventRecord)) {
+    return NextResponse.json({ error: "hunt_closed", message: "活動目前未開放，不能刪除尋物投稿。" }, { status: 422 });
+  }
+  if (submission.status === "correct") {
+    return NextResponse.json({ error: "confirmed_submission", message: "已由管理員確認正確的照片不能自行刪除，請聯絡管理員。" }, { status: 422 });
+  }
+
+  const { data: deleted, error: deleteError } = await admin
+    .from("hunt_submissions")
+    .delete()
+    .eq("id", submission.id)
+    .eq("profile_id", user.id)
+    .neq("status", "correct")
+    .select("id")
+    .maybeSingle();
+  if (deleteError || !deleted) {
+    return NextResponse.json({ error: "delete_failed", message: "刪除失敗，原投稿仍保持不變。" }, { status: 409 });
+  }
+
+  const { error: storageError } = await admin.storage.from("hunt-proofs").remove([submission.image_path]);
+  await admin.from("audit_logs").insert({
+    actor_profile_id: profile.id,
+    actor_discord_id: profile.discord_id,
+    actor_nickname: profile.nickname,
+    action_type: "hunt_submission_delete_by_owner",
+    target_type: "hunt_submission",
+    target_id: String(submission.id),
+    before_data: submission,
+    after_data: { deleted: true, storage_removed: !storageError },
+    result: storageError ? "failure" : "success",
+    failure_reason: storageError?.message ?? null,
+    request_id: request.headers.get("x-request-id")?.slice(0, 120) || crypto.randomUUID(),
+  });
+
+  revalidatePath("/hunt");
+  return NextResponse.json({
+    ok: true,
+    message: storageError
+      ? "投稿紀錄已刪除；照片檔案將由管理員稍後清理。"
+      : "錯誤的尋物投稿與照片已刪除。",
+  });
 }

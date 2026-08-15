@@ -103,3 +103,23 @@ test("hunt migration is additive and cannot remove existing Cos data", () => {
   assert.match(migration, /alter table public\.hunt_events enable row level security/i);
   assert.match(migration, /alter table public\.hunt_submissions enable row level security/i);
 });
+
+test("players can delete only their own unconfirmed hunt submissions while the hunt is open", () => {
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/hunt/submissions/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/hunt/HuntClient.tsx"),
+    "utf8",
+  );
+  assert.match(route, /export async function DELETE/);
+  assert.match(route, /submission\.profile_id !== user\.id/);
+  assert.match(route, /!isHuntOpen\(event as HuntEventRecord\)/);
+  assert.match(route, /submission\.status === "correct"/);
+  assert.match(route, /\.eq\("profile_id", user\.id\)/);
+  assert.match(route, /\.neq\("status", "correct"\)/);
+  assert.match(route, /storage\.from\("hunt-proofs"\)\.remove/);
+  assert.match(client, /刪除這筆錯誤投稿/);
+  assert.match(client, /method: "DELETE"/);
+});

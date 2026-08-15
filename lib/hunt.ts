@@ -84,6 +84,8 @@ export type HuntRankingRow = {
   profileId: string;
   nickname: string;
   correctCount: number;
+  confirmedCount: number;
+  aiPendingCount: number;
   reachedAt: string | null;
   rank: number;
 };
@@ -94,6 +96,7 @@ export type HuntPublicPlayerPhoto = {
   nickname: string;
   submittedAt: string;
   signedUrl: string;
+  verificationStatus: "confirmed" | "ai_pending";
 };
 
 export type HuntPublicAnswerPhoto = {
@@ -129,19 +132,41 @@ export function canShowHuntAnswerPhotos(event: HuntEventRecord | null, now = Dat
 }
 
 export function calculateHuntRanking(
-  submissions: Array<Pick<HuntSubmissionRecord, "profile_id" | "status" | "submitted_at">>,
+  submissions: Array<Pick<HuntSubmissionRecord, "profile_id" | "status" | "submitted_at" | "matched_target_number" | "auto_status" | "auto_match_target_number">>,
   profiles: Array<{ id: string; nickname: string }>,
 ) {
-  const correct = submissions.filter((submission) => submission.status === "correct");
   const rows: Omit<HuntRankingRow, "rank">[] = profiles.map((profile) => {
-    const finds = correct
-      .filter((submission) => submission.profile_id === profile.id)
-      .sort((left, right) => Date.parse(left.submitted_at) - Date.parse(right.submitted_at));
+    const acceptedTargets = new Map<number, { submittedAt: string; confirmed: boolean }>();
+    for (const submission of submissions) {
+      if (submission.profile_id !== profile.id) continue;
+      const confirmed = submission.status === "correct" && submission.matched_target_number != null;
+      const aiPending = submission.status === "pending"
+        && submission.auto_status === "matched"
+        && submission.auto_match_target_number != null;
+      const targetNumber = confirmed ? submission.matched_target_number : aiPending ? submission.auto_match_target_number : null;
+      if (targetNumber == null) continue;
+      const previous = acceptedTargets.get(targetNumber);
+      if (!previous) {
+        acceptedTargets.set(targetNumber, { submittedAt: submission.submitted_at, confirmed });
+      } else {
+        acceptedTargets.set(targetNumber, {
+          submittedAt: Date.parse(submission.submitted_at) < Date.parse(previous.submittedAt)
+            ? submission.submitted_at
+            : previous.submittedAt,
+          confirmed: previous.confirmed || confirmed,
+        });
+      }
+    }
+    const finds = [...acceptedTargets.values()]
+      .sort((left, right) => Date.parse(left.submittedAt) - Date.parse(right.submittedAt));
+    const confirmedCount = finds.filter((find) => find.confirmed).length;
     return {
       profileId: profile.id,
       nickname: profile.nickname,
       correctCount: finds.length,
-      reachedAt: finds.at(-1)?.submitted_at ?? null,
+      confirmedCount,
+      aiPendingCount: finds.length - confirmedCount,
+      reachedAt: finds.at(-1)?.submittedAt ?? null,
     };
   }).filter((row) => row.correctCount > 0)
     .sort((left, right) => (

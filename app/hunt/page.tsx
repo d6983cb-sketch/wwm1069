@@ -35,31 +35,33 @@ export default async function HuntPage() {
 
   let publicPlayerPhotos: HuntPublicPlayerPhoto[] = [];
   if (event && canShowHuntPlayerPhotos(event)) {
-    const { data: correctPhotos } = await admin
+    const { data: acceptedPhotos } = await admin
       .from("hunt_submissions")
-      .select("id,profile_id,image_path,matched_target_number,submitted_at")
+      .select("id,profile_id,image_path,status,matched_target_number,auto_status,auto_match_target_number,submitted_at")
       .eq("hunt_event_id", event.id)
-      .eq("status", "correct")
-      .not("matched_target_number", "is", null)
-      .order("matched_target_number")
+      .or("status.eq.correct,and(status.eq.pending,auto_status.eq.matched)")
       .order("submitted_at");
-    const publicProfileIds = [...new Set((correctPhotos ?? []).map((item) => item.profile_id))];
+    const publicProfileIds = [...new Set((acceptedPhotos ?? []).map((item) => item.profile_id))];
     const { data: publicProfiles } = publicProfileIds.length
       ? await admin.from("profiles").select("id,nickname,is_disqualified").in("id", publicProfileIds)
       : { data: [] };
     const nicknameByProfile = new Map(
       (publicProfiles ?? []).filter((item) => !item.is_disqualified).map((item) => [item.id, item.nickname]),
     );
-    const visiblePhotos = (correctPhotos ?? []).filter((item) => nicknameByProfile.has(item.profile_id) && item.matched_target_number);
+    const visiblePhotos = (acceptedPhotos ?? []).map((item) => ({
+      ...item,
+      effectiveTargetNumber: item.status === "correct" ? item.matched_target_number : item.auto_match_target_number,
+    })).filter((item) => nicknameByProfile.has(item.profile_id) && item.effectiveTargetNumber);
     publicPlayerPhotos = (await Promise.all(visiblePhotos.map(async (submission) => {
       const { data } = await admin.storage.from("hunt-proofs").createSignedUrl(submission.image_path, 60 * 15);
-      if (!data?.signedUrl || !submission.matched_target_number) return null;
+      if (!data?.signedUrl || !submission.effectiveTargetNumber) return null;
       return {
         id: submission.id,
-        targetNumber: submission.matched_target_number,
+        targetNumber: submission.effectiveTargetNumber,
         nickname: nicknameByProfile.get(submission.profile_id) ?? "未知玩家",
         submittedAt: submission.submitted_at,
         signedUrl: data.signedUrl,
+        verificationStatus: submission.status === "correct" ? "confirmed" : "ai_pending",
       } satisfies HuntPublicPlayerPhoto;
     }))).filter((item): item is HuntPublicPlayerPhoto => item !== null);
   }
@@ -98,17 +100,17 @@ export default async function HuntPage() {
 
   let ranking: ReturnType<typeof calculateHuntRanking> = [];
   if (event && canShowHuntRanking(event)) {
-    const { data: correct } = await admin
+    const { data: accepted } = await admin
       .from("hunt_submissions")
-      .select("profile_id,status,submitted_at")
+      .select("profile_id,status,submitted_at,matched_target_number,auto_status,auto_match_target_number")
       .eq("hunt_event_id", event.id)
-      .eq("status", "correct");
-    const profileIds = [...new Set((correct ?? []).map((item) => item.profile_id))];
+      .or("status.eq.correct,and(status.eq.pending,auto_status.eq.matched)");
+    const profileIds = [...new Set((accepted ?? []).map((item) => item.profile_id))];
     const { data: rankingProfiles } = profileIds.length
       ? await admin.from("profiles").select("id,nickname,is_disqualified").in("id", profileIds)
       : { data: [] };
     ranking = calculateHuntRanking(
-      (correct ?? []) as Array<Pick<HuntSubmissionRecord, "profile_id" | "status" | "submitted_at">>,
+      (accepted ?? []) as Array<Pick<HuntSubmissionRecord, "profile_id" | "status" | "submitted_at" | "matched_target_number" | "auto_status" | "auto_match_target_number">>,
       (rankingProfiles ?? []).filter((item) => !item.is_disqualified),
     );
   }

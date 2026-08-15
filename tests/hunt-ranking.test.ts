@@ -215,7 +215,7 @@ test("public hunt page creates private signed URLs only after server-side reveal
   const page = fs.readFileSync(path.join(process.cwd(), "app/hunt/page.tsx"), "utf8");
   assert.match(page, /if \(event && canShowHuntPlayerPhotos\(event\)\)/);
   assert.match(page, /if \(event && canShowHuntAnswerPhotos\(event\)\)/);
-  assert.match(page, /\.eq\("status", "correct"\)/);
+  assert.match(page, /status\.eq\.correct,and\(status\.eq\.pending,auto_status\.eq\.matched\)/);
   assert.match(page, /storage\.from\("hunt-proofs"\)\.createSignedUrl/);
   assert.match(page, /storage\.from\("hunt-references"\)\.createSignedUrl/);
 });
@@ -257,13 +257,14 @@ test("admins can reprocess a hunt proof without replacing the proof or manual re
   assert.doesNotMatch(block, /\b(status|matched_target_number|image_path|file_hash):/);
 });
 
-test("ranking counts only correct finds and favors the earlier reached count", () => {
+test("ranking counts manual and AI-provisional finds and favors the earlier reached count", () => {
   const ranking = calculateHuntRanking([
-    { profile_id: "a", status: "correct", submitted_at: "2026-08-12T01:00:00Z" },
-    { profile_id: "a", status: "correct", submitted_at: "2026-08-12T02:00:00Z" },
-    { profile_id: "b", status: "correct", submitted_at: "2026-08-12T01:30:00Z" },
-    { profile_id: "b", status: "correct", submitted_at: "2026-08-12T03:00:00Z" },
-    { profile_id: "b", status: "duplicate", submitted_at: "2026-08-12T03:10:00Z" },
+    { profile_id: "a", status: "correct", submitted_at: "2026-08-12T01:00:00Z", matched_target_number: 1, auto_status: "matched", auto_match_target_number: 1 },
+    { profile_id: "a", status: "pending", submitted_at: "2026-08-12T02:00:00Z", matched_target_number: null, auto_status: "matched", auto_match_target_number: 2 },
+    { profile_id: "b", status: "correct", submitted_at: "2026-08-12T01:30:00Z", matched_target_number: 1, auto_status: "matched", auto_match_target_number: 1 },
+    { profile_id: "b", status: "correct", submitted_at: "2026-08-12T03:00:00Z", matched_target_number: 2, auto_status: "matched", auto_match_target_number: 2 },
+    { profile_id: "b", status: "duplicate", submitted_at: "2026-08-12T03:10:00Z", matched_target_number: 2, auto_status: "matched", auto_match_target_number: 2 },
+    { profile_id: "a", status: "incorrect", submitted_at: "2026-08-12T01:10:00Z", matched_target_number: null, auto_status: "matched", auto_match_target_number: 3 },
   ], [
     { id: "a", nickname: "甲" },
     { id: "b", nickname: "乙" },
@@ -273,6 +274,23 @@ test("ranking counts only correct finds and favors the earlier reached count", (
     ["乙", 2, 2],
   ]);
   assert.equal(ranking[0].reachedAt, "2026-08-12T02:00:00Z");
+  assert.deepEqual([ranking[0].confirmedCount, ranking[0].aiPendingCount], [1, 1]);
+  assert.deepEqual([ranking[1].confirmedCount, ranking[1].aiPendingCount], [2, 0]);
+});
+
+test("public ranking is rendered above the scheduled photo area", () => {
+  const client = fs.readFileSync(path.join(process.cwd(), "app/hunt/HuntClient.tsx"), "utf8");
+  assert.ok(client.indexOf('<section className="hunt-ranking">') < client.indexOf('<section className="hunt-public-photos">'));
+  assert.match(client, /AI 通過會立即計入暫定結果/);
+  assert.match(client, /verificationStatus === "confirmed"/);
+});
+
+test("human review can take down or restore an AI provisional result without deleting proof files", () => {
+  const route = fs.readFileSync(path.join(process.cwd(), "app/api/admin/hunt/route.ts"), "utf8");
+  const reviewBlock = route.slice(route.indexOf('if (type === "hunt_review")'), route.indexOf('return json("unsupported_action"'));
+  assert.match(route, /\["pending", "correct", "incorrect", "duplicate"\]/);
+  assert.match(reviewBlock, /finalStatus === "correct" \|\| finalStatus === "duplicate" \? targetNumber : null/);
+  assert.doesNotMatch(reviewBlock, /storage\.from\("hunt-proofs"\)\.(remove|upload)/);
 });
 
 test("hunt migration is additive and cannot remove existing Cos data", () => {

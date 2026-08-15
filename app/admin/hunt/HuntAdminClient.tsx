@@ -250,6 +250,52 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     });
   };
 
+  const quickReview = async (submission: ReviewRow, status: "pending" | "correct" | "incorrect") => {
+    const targetNumber = submission.matched_target_number ?? submission.auto_match_target_number;
+    const label = status === "correct" ? "確認正確" : status === "incorrect" ? "下架為錯誤" : "恢復 AI 暫定";
+    const impact = status === "incorrect"
+      ? "照片會從暫定排名與公開區移除，但 Storage 原圖與投稿紀錄都會保留。"
+      : status === "pending"
+        ? "若 AI 原判通過，照片會重新列入暫定排名與公開區。"
+        : "照片會成為人工確認結果。";
+    if (!confirm(`確定對照片 #${submission.id} 執行「${label}」？\n${impact}`)) return;
+    await action({
+      type: "hunt_review",
+      submissionId: submission.id,
+      status,
+      targetNumber: status === "correct" ? targetNumber : null,
+      reviewNote: status === "incorrect" ? "管理員人工下架" : status === "pending" ? "恢復 AI 暫定，等待人工覆核" : submission.review_note,
+    });
+  };
+
+  const reprocessIncomplete = async () => {
+    const pending = submissions.filter((submission) => submission.status === "pending" && (
+      !submission.auto_verification_model || ["not_run", "uncertain", "error"].includes(submission.auto_status)
+    ));
+    if (!pending.length) return setMessage("所有待審照片都已完成二階段 AI 檢測。");
+    if (!confirm(`將依序重新檢測 ${pending.length} 張尚未完成辨識的待審照片。照片與人工審核結果都不會被覆蓋，確定開始？`)) return;
+    setBusy(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const [index, submission] of pending.entries()) {
+      setMessage(`正在檢測 ${index + 1} / ${pending.length}：照片 #${submission.id}`);
+      try {
+        const response = await fetch("/api/admin/hunt", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
+          body: JSON.stringify({ type: "hunt_submission_reprocess", submissionId: submission.id }),
+        });
+        if (response.ok) succeeded += 1;
+        else failed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBusy(false);
+    setMessage(`AI 檢測完成：成功 ${succeeded} 張、失敗 ${failed} 張。即將重新整理結果…`);
+    setTimeout(() => location.reload(), 900);
+  };
+
   return <>
     <header className="admin-heading">
       <div><small>HIDDEN OBJECT HUNT</small><h1>尋物活動管理</h1></div>
@@ -325,7 +371,7 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     </section>
 
     {canReview && <section className="hunt-review-list">
-      <h2>照片審核</h2>
+      <header className="hunt-review-heading"><div><h2>照片審核</h2><p>AI 通過會先計入暫定排名；人工判錯或重複後會下架，但不會刪除原圖或投稿紀錄。</p></div><button type="button" disabled={busy || !aiConfigured} onClick={reprocessIncomplete}>重新檢測未完成的待審照片</button></header>
       {submissions.length ? submissions.map((submission) => <article key={submission.id} className={submission.status}>
         <div className="hunt-review-photo">
           {submission.signedUrl ? <a href={submission.signedUrl} target="_blank"><Image src={submission.signedUrl} width={520} height={390} alt={`尋物審核照片 ${submission.id}`} unoptimized /></a> : <span>照片無法載入</span>}
@@ -342,10 +388,15 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
             {submission.auto_verification?.reason && <small>{submission.auto_verification.reason}</small>}
             <button type="button" disabled={busy || !aiConfigured} onClick={() => action({ type: "hunt_submission_reprocess", submissionId: submission.id })}>以二階段視覺重新辨識</button>
           </div>
+          <div className="hunt-review-quick-actions">
+            {submission.auto_match_target_number && submission.status !== "correct" && <button type="button" disabled={busy || submission.disqualified} onClick={() => quickReview(submission, "correct")}>確認正確</button>}
+            {submission.status !== "incorrect" && <button type="button" className="danger" disabled={busy} onClick={() => quickReview(submission, "incorrect")}>下架為錯誤</button>}
+            {["incorrect", "duplicate"].includes(submission.status) && submission.auto_status === "matched" && <button type="button" disabled={busy} onClick={() => quickReview(submission, "pending")}>恢復 AI 暫定</button>}
+          </div>
           {submission.disqualified && <strong className="form-error">此玩家已取消資格</strong>}
           <form onSubmit={(formEvent) => review(formEvent, submission.id)}>
             <label>判定<select name="status" defaultValue={submission.status === "pending" ? "correct" : submission.status}>
-              <option value="correct">正確</option><option value="incorrect">錯誤</option><option value="duplicate">重複</option>
+              <option value="pending">AI 暫定／待覆核</option><option value="correct">正確</option><option value="incorrect">錯誤</option><option value="duplicate">重複</option>
             </select></label>
             <label>藏物編號<select name="targetNumber" defaultValue={submission.matched_target_number ?? submission.auto_match_target_number ?? ""}>
               <option value="">不指定</option>
@@ -358,8 +409,8 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
       </article>) : <p className="muted">目前沒有上傳照片。</p>}
     </section>}
 
-    <section className="hunt-ranking hunt-admin-ranking"><h2>尋物排行榜</h2>
-      {ranking.length ? ranking.map((row) => <article key={row.profileId}><b>第 {row.rank} 名</b><span>{row.nickname}</span><strong>{row.correctCount} 個</strong></article>) : <p className="muted">尚無正確紀錄。</p>}
+    <section className="hunt-ranking hunt-admin-ranking"><h2>尋物排行榜（含 AI 暫定）</h2>
+      {ranking.length ? ranking.map((row) => <article key={row.profileId}><b>第 {row.rank} 名</b><span>{row.nickname}<small>人工 {row.confirmedCount} · AI 暫定 {row.aiPendingCount}</small></span><strong>{row.correctCount} 個</strong></article>) : <p className="muted">尚無通過紀錄。</p>}
     </section>
   </>;
 }

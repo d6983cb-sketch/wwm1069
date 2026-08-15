@@ -8,7 +8,7 @@ export const maxDuration = 60;
 
 const statuses: HuntEventStatus[] = ["draft", "open", "closed", "results_published", "archived"];
 const leaderboardModes: HuntLeaderboardMode[] = ["hidden", "live", "final"];
-const reviewStatuses: HuntReviewStatus[] = ["correct", "incorrect", "duplicate"];
+const reviewStatuses: HuntReviewStatus[] = ["pending", "correct", "incorrect", "duplicate"];
 
 function json(error: string, message: string, status: number) {
   return NextResponse.json({ error, message }, { status });
@@ -382,7 +382,7 @@ export async function POST(request: Request) {
 
     const update = {
       status: finalStatus,
-      matched_target_number: finalStatus === "incorrect" ? null : targetNumber,
+      matched_target_number: finalStatus === "correct" || finalStatus === "duplicate" ? targetNumber : null,
       duplicate_of_id: finalStatus === "duplicate" ? duplicateOfId : null,
       review_note: reviewNote || null,
       reviewed_by: context.profile.id,
@@ -394,7 +394,9 @@ export async function POST(request: Request) {
     await writeAuditLog({ context, actionType: "hunt_submission_review", targetType: "hunt_submission", targetId: submissionId, beforeData: before, afterData: after });
     return NextResponse.json({
       ok: true,
-      message: finalStatus === "duplicate" && requestedStatus === "correct"
+      message: finalStatus === "pending"
+        ? "已恢復為 AI 暫定／待人工覆核；若 AI 原判通過，會重新計入暫定排名。"
+        : finalStatus === "duplicate" && requestedStatus === "correct"
         ? "已偵測為同一玩家的重複藏物，照片已標記為重複。"
         : "審核結果已儲存。",
     });

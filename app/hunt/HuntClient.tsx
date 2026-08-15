@@ -323,7 +323,7 @@ export default function HuntClient({
             {submission.signedUrl ? <Image src={submission.signedUrl} width={320} height={240} alt={`尋物照片 ${submission.id}`} unoptimized /> : <span className="muted">照片暫時無法載入</span>}
             <b className={`hunt-status ${submission.status}`}>{statusLabels[submission.status]}</b>
             {submission.matched_target_number && <span>藏物 H{String(submission.matched_target_number).padStart(3, "0")}</span>}
-            {submission.status === "pending" && submission.auto_status === "matched" && submission.auto_match_target_number && <span className="hunt-auto-player">暫定 H{String(submission.auto_match_target_number).padStart(3, "0")} · 視覺信心 {Math.round((submission.auto_verification_confidence ?? 0) * 100)}%<small>等待人工確認</small></span>}
+            {submission.status === "pending" && submission.auto_status === "matched" && submission.auto_match_target_number && <span className="hunt-auto-player">AI 已通過 H{String(submission.auto_match_target_number).padStart(3, "0")} · 視覺信心 {Math.round((submission.auto_verification_confidence ?? 0) * 100)}%<small>已計入暫定排名，等待人工覆核</small></span>}
             {submission.status === "pending" && submission.auto_status === "duplicate" && <span className="hunt-auto-player warning">疑似重複點位，暫不重複計數<small>等待人工確認</small></span>}
             {submission.status === "pending" && submission.auto_status === "uncertain" && <span className="hunt-auto-player warning">自動辨識不確定<small>已轉人工審核</small></span>}
             {submission.status === "pending" && submission.auto_status === "error" && <span className="hunt-auto-player warning">自動辨識未完成<small>已轉人工審核，照片不需重傳</small></span>}
@@ -339,28 +339,37 @@ export default function HuntClient({
         </div> : <p className="muted">尚未上傳照片。</p>}
       </section>}
 
+      <section className="hunt-ranking">
+        <header><div><h2>尋物活動排行榜</h2><p>AI 通過會立即計入暫定結果；管理員判定錯誤或重複後會自動移除。</p></div></header>
+        {canShowHuntRanking(event) ? (
+          ranking.length ? ranking.map((row) => <article key={row.profileId}>
+            <b>第 {row.rank} 名</b><span>{row.nickname}<small>人工 {row.confirmedCount} · AI 暫定 {row.aiPendingCount}</small></span><strong>{row.correctCount} 個</strong>
+          </article>) : <p className="muted">目前尚無通過辨識的紀錄。</p>
+        ) : <div className="hunt-ranking-hidden">排行榜目前未公開，結果公布後會顯示。</div>}
+      </section>
+
       {(event.reveal_player_photos || event.reveal_answer_photos) && <section className="hunt-public-photos">
         <header>
-          <div><h2>活動照片公開區</h2><p>只有管理員人工確認正確的玩家照片與啟用中的答案照片會在這裡顯示。</p></div>
+          <div><h2>活動照片公開區</h2><p>顯示人工確認與 AI 暫定通過的照片；人工判錯、重複或下架後會立即停止公開。</p></div>
           {event.photo_reveal_at && <time>{photoRevealReached ? "已公開" : `預計 ${formatTaipeiDateTime(event.photo_reveal_at)} 公開`}</time>}
         </header>
         {!photoRevealReached ? (
           <div className="hunt-photo-locked"><i>鎖</i><b>公開時間尚未到達</b><span>其他玩家的投稿照片與答案圖仍保持隱藏。</span></div>
         ) : <>
           {event.reveal_player_photos && <div className="hunt-public-photo-group">
-            <h3>玩家找到的正確照片</h3>
+            <h3>玩家找到的照片</h3>
             {showPlayerPhotos && publicPlayerPhotos.length ? <div className="hunt-public-photo-grid">
               {publicPlayerPhotos.map((photo) => <figure key={`player-${photo.id}`}>
-                <Image src={photo.signedUrl} width={360} height={270} alt={`${photo.nickname} 找到的 H${String(photo.targetNumber).padStart(3, "0")}`} unoptimized />
-                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.nickname}</span></figcaption>
+                <Image src={photo.signedUrl} width={240} height={180} sizes="(max-width: 760px) 44vw, 220px" alt={`${photo.nickname} 找到的 H${String(photo.targetNumber).padStart(3, "0")}`} unoptimized />
+                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.nickname}<em>{photo.verificationStatus === "confirmed" ? "人工確認" : "AI 暫定"}</em></span></figcaption>
               </figure>)}
-            </div> : <p className="muted">目前沒有可公開的正確照片。</p>}
+            </div> : <p className="muted">目前沒有可公開的通過照片。</p>}
           </div>}
           {event.reveal_answer_photos && <div className="hunt-public-photo-group">
             <h3>答案與點位參考照片</h3>
             {showAnswerPhotos && publicAnswerPhotos.length ? <div className="hunt-public-photo-grid">
               {publicAnswerPhotos.map((photo) => <figure key={`answer-${photo.id}`}>
-                <Image src={photo.signedUrl} width={360} height={270} alt={`H${String(photo.targetNumber).padStart(3, "0")} 答案照片`} unoptimized />
+                <Image src={photo.signedUrl} width={240} height={180} sizes="(max-width: 760px) 44vw, 220px" alt={`H${String(photo.targetNumber).padStart(3, "0")} 答案照片`} unoptimized />
                 <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.label || "未命名點位"}</span></figcaption>
               </figure>)}
             </div> : <p className="muted">目前沒有啟用中的答案照片。</p>}
@@ -368,14 +377,6 @@ export default function HuntClient({
         </>}
       </section>}
 
-      <section className="hunt-ranking">
-        <h2>尋物活動排行榜</h2>
-        {canShowHuntRanking(event) ? (
-          ranking.length ? ranking.map((row) => <article key={row.profileId}>
-            <b>第 {row.rank} 名</b><span>{row.nickname}</span><strong>{row.correctCount} 個</strong>
-          </article>) : <p className="muted">目前尚無正確紀錄。</p>
-        ) : <div className="hunt-ranking-hidden">排行榜目前未公開，結果公布後會顯示。</div>}
-      </section>
     </>
   );
 }

@@ -12,7 +12,7 @@ import {
   isHuntOpen,
   type HuntEventRecord,
 } from "../lib/hunt.ts";
-import { classifyHuntMatches, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, parseHuntVerificationText, withHuntAiQueue } from "../lib/hunt-ai.ts";
+import { classifyHuntMatches, extractHuntVerificationText, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, parseHuntVerificationText, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -121,6 +121,13 @@ test("visual verification safely accepts schema-shaped JSON5-like output", () =>
     reason: "固定建築位置一致",
   });
   assert.throws(() => parseHuntVerificationText("not structured output"), /hunt_ai_invalid_verification_json_target_confidence_visible_location/);
+});
+
+test("visual verification ignores Gemini thought parts and parses only the final answer", () => {
+  assert.equal(extractHuntVerificationText([
+    { text: "internal reasoning that is not JSON", thought: true },
+    { text: '{"matchedTargetNumber":15}', thought: false },
+  ]), '{"matchedTargetNumber":15}');
 });
 
 test("hunt AI retries exactly three times after HTTP 429", async () => {

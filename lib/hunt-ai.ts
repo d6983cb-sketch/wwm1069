@@ -214,6 +214,14 @@ export function parseHuntVerificationText(text: string) {
   }
 }
 
+export function extractHuntVerificationText(parts: Array<{ text?: string; thought?: boolean }> = []) {
+  return parts
+    .filter((part) => part.thought !== true)
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim();
+}
+
 type ReferenceForVerification = {
   targetNumber: number;
   label: string | null;
@@ -262,7 +270,8 @@ export async function verifyHuntCandidateImages(
             contents: [{ role: "user", parts }],
             generationConfig: {
               temperature: 0,
-              maxOutputTokens: 300,
+              maxOutputTokens: 1_024,
+              thinkingConfig: { thinkingLevel: "minimal" },
               responseMimeType: "application/json",
               responseSchema: {
                 type: "OBJECT",
@@ -283,9 +292,9 @@ export async function verifyHuntCandidateImages(
       );
       if (!response.ok) throw new Error(`hunt_ai_verification_http_${response.status}`);
       const body = await response.json() as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
       };
-      const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+      const text = extractHuntVerificationText(body.candidates?.[0]?.content?.parts);
       if (!text) throw new Error("hunt_ai_invalid_verification");
       return normalizeVerification(parseHuntVerificationText(text), allowedTargets);
     } finally {

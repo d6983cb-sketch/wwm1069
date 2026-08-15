@@ -2,7 +2,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { HuntAutoCandidate, HuntAutoStatus, HuntAutoVerification, HuntEventRecord } from "@/lib/hunt";
 
 export const HUNT_EMBEDDING_MODEL = "gemini-embedding-2";
-export const HUNT_VERIFICATION_MODEL = "gemini-2.5-flash";
+// Use the current stable multimodal Flash model for strict local-scene verification.
+// The older 2.5 endpoint returns 404 for this production API key even though the
+// embedding endpoint remains available.
+export const HUNT_VERIFICATION_MODEL = "gemini-3.5-flash";
 export const HUNT_AI_PIPELINE_MODEL = `${HUNT_EMBEDDING_MODEL}+${HUNT_VERIFICATION_MODEL}`;
 export const HUNT_EMBEDDING_DIMENSIONS = 768;
 export const HUNT_AI_MAX_429_RETRIES = 3;

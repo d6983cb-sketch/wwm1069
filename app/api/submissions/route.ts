@@ -38,6 +38,37 @@ async function removeUnreferencedUploads(entryPaths: string[], originalPath: str
   await removeUploads(removableEntryPaths, usedOriginal?.length ? null : originalPath);
 }
 
+export async function PUT() {
+  const supabase = await createClient();
+  const admin = createAdminClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "unauthorized", message: "請先登入。" }, { status: 401 });
+
+  const [{ data: event }, { data: profile }] = await Promise.all([
+    admin.from("events").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    admin.from("profiles").select("is_disqualified").eq("id", user.id).maybeSingle(),
+  ]);
+  if (!event || !isSubmissionOpen(event)) {
+    return NextResponse.json({ error: "submissions_closed", message: "目前未開放投稿。" }, { status: 422 });
+  }
+  if (!profile || profile.is_disqualified) {
+    return NextResponse.json({ error: "ineligible", message: "目前沒有活動參加資格。" }, { status: 403 });
+  }
+  const { data: existing, error } = await admin
+    .from("entries")
+    .select("id")
+    .eq("event_id", event.id)
+    .eq("owner_id", user.id)
+    .maybeSingle();
+  if (error) {
+    return NextResponse.json({ error: "preflight_failed", message: "暫時無法確認投稿狀態，請稍後再試。" }, { status: 500 });
+  }
+  if (existing) {
+    return NextResponse.json({ error: "duplicate_entry", message: "你已經投稿過，不需要再次上傳照片。" }, { status: 409 });
+  }
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const admin = createAdminClient();

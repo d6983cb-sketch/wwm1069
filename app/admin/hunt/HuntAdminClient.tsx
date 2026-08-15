@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 import { createClient } from "@/lib/supabase/browser";
-import { compressReplacementPhoto, validateReplacementPhoto, withUploadTimeout } from "@/lib/client-image-upload";
+import { compressReplacementPhoto, sha256File, validateReplacementPhoto, withUploadTimeout } from "@/lib/client-image-upload";
 import type { HuntEventRecord, HuntRankingRow, HuntReferencePoint, HuntSubmissionRecord } from "@/lib/hunt";
 
 type ReviewRow = HuntSubmissionRecord & {
@@ -184,10 +184,11 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
         const validation = validateReplacementPhoto(source);
         if (validation) throw new Error(validation);
         const file = await compressReplacementPhoto(source, "image/jpeg");
+        const fileHash = await sha256File(file);
         const signResponse = await fetch("/api/admin/hunt", {
           method: "POST",
           headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
-          body: JSON.stringify({ type: "hunt_reference_upload_url", eventId: event.id, targetNumber, mimeType: file.type }),
+          body: JSON.stringify({ type: "hunt_reference_upload_url", eventId: event.id, targetNumber, mimeType: file.type, fileHash }),
         });
         const signBody = await signResponse.json().catch(() => ({}));
         if (!signResponse.ok) throw new Error(signBody.message || "無法取得上傳權限。");
@@ -199,7 +200,7 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
         const createResponse = await fetch("/api/admin/hunt", {
           method: "POST",
           headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
-          body: JSON.stringify({ type: "hunt_reference_create", eventId: event.id, targetNumber, label, imagePath: signBody.path, mimeType: file.type }),
+          body: JSON.stringify({ type: "hunt_reference_create", eventId: event.id, targetNumber, label, imagePath: signBody.path, mimeType: file.type, fileHash }),
         });
         const createBody = await createResponse.json().catch(() => ({}));
         if (!createResponse.ok) throw new Error(createBody.message || "辨識索引建立失敗。");

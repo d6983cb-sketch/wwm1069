@@ -51,6 +51,13 @@ export function validateReplacementPhoto(file: File) {
   return "";
 }
 
+export async function sha256File(file: Blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export async function compressReplacementPhoto(file: File, preferredType: "image/webp" | "image/jpeg" = "image/webp") {
   const loaded = await loadImage(file);
   try {

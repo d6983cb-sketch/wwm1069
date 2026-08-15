@@ -96,13 +96,31 @@ export async function POST(request: Request) {
     const eventId = String(body.eventId ?? "");
     const targetNumber = Number(body.targetNumber);
     const mimeType = String(body.mimeType ?? "");
-    if (!eventId || !Number.isInteger(targetNumber) || !["image/jpeg", "image/png"].includes(mimeType)) {
+    const fileHash = String(body.fileHash ?? "").toLowerCase();
+    if (!eventId || !Number.isInteger(targetNumber) || !["image/jpeg", "image/png"].includes(mimeType) || !/^[a-f0-9]{64}$/.test(fileHash)) {
       return json("invalid_reference", "參考點位或圖片格式不正確。", 400);
     }
     const { data: event } = await admin.from("hunt_events").select("id,total_targets,status").eq("id", eventId).maybeSingle();
     if (!event) return json("event_not_found", "找不到尋物活動。", 404);
     if (event.status === "archived") return json("event_archived", "活動已封存，不能新增參考圖。", 422);
     if (targetNumber < 1 || targetNumber > event.total_targets) return json("invalid_target", `點位必須介於 1 至 ${event.total_targets}。`, 400);
+    const { data: existingPoint, error: pointLookupError } = await admin
+      .from("hunt_reference_points")
+      .select("id")
+      .eq("hunt_event_id", event.id)
+      .eq("target_number", targetNumber)
+      .maybeSingle();
+    if (pointLookupError) return json("reference_lookup_failed", "無法檢查參考圖是否重複。", 500);
+    if (existingPoint) {
+      const { data: duplicate, error: duplicateLookupError } = await admin
+        .from("hunt_reference_images")
+        .select("id")
+        .eq("reference_point_id", existingPoint.id)
+        .eq("content_sha256", fileHash)
+        .maybeSingle();
+      if (duplicateLookupError) return json("reference_lookup_failed", "無法檢查參考圖是否重複。", 500);
+      if (duplicate) return json("duplicate_reference", "這張參考圖已經存在，不需要重複上傳。", 409);
+    }
     const extension = mimeType === "image/png" ? "png" : "jpg";
     const imagePath = `${event.id}/H${String(targetNumber).padStart(3, "0")}/${crypto.randomUUID()}.${extension}`;
     const { data, error } = await admin.storage.from("hunt-references").createSignedUploadUrl(imagePath);
@@ -156,8 +174,9 @@ export async function POST(request: Request) {
     const targetNumber = Number(body.targetNumber);
     const label = String(body.label ?? "").trim().slice(0, 100);
     const mimeType = String(body.mimeType ?? "") as "image/jpeg" | "image/png";
+    const fileHash = String(body.fileHash ?? "").toLowerCase();
     const imagePath = referencePath(eventId, targetNumber, body.imagePath);
-    if (!eventId || !Number.isInteger(targetNumber) || !imagePath || !["image/jpeg", "image/png"].includes(mimeType)) {
+    if (!eventId || !Number.isInteger(targetNumber) || !imagePath || !["image/jpeg", "image/png"].includes(mimeType) || !/^[a-f0-9]{64}$/.test(fileHash)) {
       return json("invalid_reference", "參考圖資料不正確。", 400);
     }
     const { data: event } = await admin.from("hunt_events").select("id,total_targets,status").eq("id", eventId).maybeSingle();
@@ -166,9 +185,6 @@ export async function POST(request: Request) {
     if (targetNumber < 1 || targetNumber > event.total_targets) return json("invalid_target", `點位必須介於 1 至 ${event.total_targets}。`, 400);
     if (!isHuntAiConfigured()) return json("ai_not_configured", "尚未設定 Gemini API Key，無法建立圖片向量。", 422);
     try {
-      const { data: image, error: downloadError } = await admin.storage.from("hunt-references").download(imagePath);
-      if (downloadError || !image) throw new Error("reference_download_failed");
-      const embedding = await embedHuntImage(image);
       const { data: existingPoint, error: pointLookupError } = await admin
         .from("hunt_reference_points")
         .select("*")
@@ -176,6 +192,22 @@ export async function POST(request: Request) {
         .eq("target_number", targetNumber)
         .maybeSingle();
       if (pointLookupError) throw new Error("reference_point_lookup_failed");
+      if (existingPoint) {
+        const { data: duplicate, error: duplicateLookupError } = await admin
+          .from("hunt_reference_images")
+          .select("id")
+          .eq("reference_point_id", existingPoint.id)
+          .eq("content_sha256", fileHash)
+          .maybeSingle();
+        if (duplicateLookupError) throw new Error("reference_duplicate_lookup_failed");
+        if (duplicate) {
+          await admin.storage.from("hunt-references").remove([imagePath]);
+          return json("duplicate_reference", "這張參考圖已經存在，新上傳的重複檔案已安全移除。", 409);
+        }
+      }
+      const { data: image, error: downloadError } = await admin.storage.from("hunt-references").download(imagePath);
+      if (downloadError || !image) throw new Error("reference_download_failed");
+      const embedding = await embedHuntImage(image);
       const pointQuery = existingPoint
         ? admin.from("hunt_reference_points").update({
           ...(label ? { label } : {}),
@@ -197,10 +229,15 @@ export async function POST(request: Request) {
         reference_point_id: point.id,
         image_path: imagePath,
         mime_type: mimeType,
+        content_sha256: fileHash,
         embedding,
         embedding_model: HUNT_EMBEDDING_MODEL,
         created_by: context.profile.id,
       }).select("id,image_path,reference_point_id,embedding_model,is_active,created_at").single();
+      if (imageError?.code === "23505") {
+        await admin.storage.from("hunt-references").remove([imagePath]);
+        return json("duplicate_reference", "這張參考圖已經存在，新上傳的重複檔案已安全移除。", 409);
+      }
       if (imageError || !created) throw new Error("reference_image_failed");
       await writeAuditLog({ context, actionType: "hunt_reference_create", targetType: "hunt_reference_image", targetId: created.id, afterData: { ...created, target_number: targetNumber } });
       return NextResponse.json({ ok: true, message: `H${String(targetNumber).padStart(3, "0")} 參考圖已建立並完成辨識索引。` });

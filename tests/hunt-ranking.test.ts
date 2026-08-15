@@ -231,3 +231,43 @@ test("administrators can edit a reference point and append helper images without
   assert.match(client, /replaceInputFiles\(inputRef\.current, next\)/);
   assert.match(client, /準備上傳的參考圖預覽/);
 });
+
+test("hunt uploads check exact duplicates before creating Storage objects", () => {
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/hunt/submissions/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/hunt/HuntClient.tsx"),
+    "utf8",
+  );
+  assert.match(route, /export async function PUT/);
+  assert.match(route, /\.eq\("file_hash", fileHash\)/);
+  assert.match(client, /method: "PUT"/);
+  assert.ok(
+    client.indexOf('method: "PUT"') < client.indexOf('storage.from("hunt-proofs").upload'),
+    "duplicate preflight must run before uploading the proof",
+  );
+});
+
+test("hunt reference hashes are additive and cannot change existing images", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815170000_hunt_reference_content_hash.sql"),
+    "utf8",
+  );
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/admin/hunt/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/admin/hunt/HuntAdminClient.tsx"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists content_sha256 text/i);
+  assert.match(migration, /unique index if not exists hunt_reference_images_point_content_sha256_uidx/i);
+  assert.doesNotMatch(migration, /\b(delete|truncate|update|drop table|drop column)\b/i);
+  assert.match(route, /\.eq\("content_sha256", fileHash\)/);
+  assert.match(route, /content_sha256: fileHash/);
+  assert.match(client, /sha256File\(file\)/);
+  assert.match(client, /fileHash/);
+});

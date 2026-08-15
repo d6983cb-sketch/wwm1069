@@ -8,6 +8,7 @@ import {
   compressReplacementPhoto,
   replacementFileExtension,
   replacementUploadError,
+  sha256File,
   validateReplacementPhoto,
   withUploadTimeout,
 } from "@/lib/client-image-upload";
@@ -43,11 +44,6 @@ const statusLabels = {
   incorrect: "不正確",
   duplicate: "重複",
 };
-
-async function sha256(file: File) {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 export default function HuntClient({
   event,
@@ -165,7 +161,16 @@ export default function HuntClient({
       setMessage(`正在依序處理 ${index + 1} / ${queuedPhotos.length} 張…`);
       try {
         const compressed = await compressReplacementPhoto(photo.file, "image/jpeg");
-        const fileHash = await sha256(compressed);
+        const fileHash = await sha256File(compressed);
+        const preflightResponse = await fetch("/api/hunt/submissions", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ fileHash }),
+        });
+        const preflightBody = await preflightResponse.json().catch(() => ({}));
+        if (!preflightResponse.ok) {
+          throw new Error(preflightBody.message || "尋物照片目前無法送出。");
+        }
         imagePath = `${userId}/${crypto.randomUUID()}-proof.${replacementFileExtension(compressed)}`;
         const supabase = createClient();
         const { error: uploadError } = await withUploadTimeout(

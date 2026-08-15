@@ -51,13 +51,13 @@ export function validateReplacementPhoto(file: File) {
   return "";
 }
 
-export async function compressReplacementPhoto(file: File) {
+export async function compressReplacementPhoto(file: File, preferredType: "image/webp" | "image/jpeg" = "image/webp") {
   const loaded = await loadImage(file);
   try {
     let scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(loaded.width, loaded.height));
     let quality = 0.88;
     let result: Blob | null = null;
-    let outputType = "image/webp";
+    let outputType = preferredType;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(loaded.width * scale));

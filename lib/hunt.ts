@@ -1,6 +1,12 @@
 export type HuntEventStatus = "draft" | "open" | "closed" | "results_published" | "archived";
 export type HuntLeaderboardMode = "hidden" | "live" | "final";
 export type HuntReviewStatus = "pending" | "correct" | "incorrect" | "duplicate";
+export type HuntAutoStatus = "not_run" | "matched" | "uncertain" | "duplicate" | "error";
+
+export type HuntAutoCandidate = {
+  targetNumber: number;
+  similarity: number;
+};
 
 export type HuntEventRecord = {
   id: string;
@@ -13,6 +19,9 @@ export type HuntEventRecord = {
   ends_at: string;
   status: HuntEventStatus;
   leaderboard_mode: HuntLeaderboardMode;
+  auto_match_enabled: boolean;
+  auto_match_threshold: number;
+  auto_match_margin: number;
 };
 
 export type HuntSubmissionRecord = {
@@ -28,6 +37,33 @@ export type HuntSubmissionRecord = {
   review_note: string | null;
   submitted_at: string;
   reviewed_at: string | null;
+  auto_status: HuntAutoStatus;
+  auto_match_target_number: number | null;
+  auto_similarity: number | null;
+  auto_candidates: HuntAutoCandidate[];
+  auto_checked_at: string | null;
+  auto_model: string | null;
+};
+
+export type HuntReferencePoint = {
+  id: string;
+  hunt_event_id: string;
+  target_number: number;
+  label: string | null;
+  is_active: boolean;
+  created_at: string;
+  images: HuntReferenceImage[];
+};
+
+export type HuntReferenceImage = {
+  id: string;
+  reference_point_id: string;
+  image_path: string;
+  mime_type: "image/jpeg" | "image/png";
+  embedding_model: string;
+  is_active: boolean;
+  created_at: string;
+  signedUrl?: string | null;
 };
 
 export type HuntRankingRow = {
@@ -72,4 +108,23 @@ export function calculateHuntRanking(
     ));
 
   return rows.map((row, index): HuntRankingRow => ({ ...row, rank: index + 1 }));
+}
+
+export function calculateHuntProgress(
+  submissions: Array<Pick<HuntSubmissionRecord, "status" | "matched_target_number" | "auto_status" | "auto_match_target_number">>,
+) {
+  const confirmed = new Set<number>();
+  const provisional = new Set<number>();
+  for (const submission of submissions) {
+    if (submission.status === "correct" && submission.matched_target_number) {
+      confirmed.add(submission.matched_target_number);
+      provisional.add(submission.matched_target_number);
+    }
+  }
+  for (const submission of submissions) {
+    if (submission.status === "pending" && submission.auto_status === "matched" && submission.auto_match_target_number) {
+      provisional.add(submission.auto_match_target_number);
+    }
+  }
+  return { confirmedCount: confirmed.size, provisionalCount: provisional.size };
 }

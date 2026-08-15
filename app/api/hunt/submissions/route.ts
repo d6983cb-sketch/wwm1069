@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { isHuntOpen, type HuntEventRecord } from "@/lib/hunt";
+import { calculateHuntProgress, isHuntOpen, type HuntAutoStatus, type HuntEventRecord, type HuntSubmissionRecord } from "@/lib/hunt";
+import { HUNT_EMBEDDING_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
+
+export const maxDuration = 60;
 
 const validPath = (userId: string, value: unknown) => {
   if (typeof value !== "string") return false;
@@ -72,5 +75,67 @@ export async function POST(request: Request) {
     }, { status: duplicateFile ? 409 : 500 });
   }
 
-  return NextResponse.json({ ok: true, message: "照片已送出，等待管理員審核。", submission: created });
+  let autoMessage = "照片已送出，等待管理員審核。";
+  if (event.auto_match_enabled) {
+    if (!isHuntAiConfigured()) {
+      await admin.from("hunt_submissions").update({
+        auto_status: "error",
+        auto_checked_at: new Date().toISOString(),
+        auto_model: HUNT_EMBEDDING_MODEL,
+      }).eq("id", created.id);
+      autoMessage = "照片已送出；自動辨識暫時未設定，將由管理員人工審核。";
+    } else {
+      try {
+        const { data: proof, error: downloadError } = await admin.storage.from("hunt-proofs").download(imagePath);
+        if (downloadError || !proof) throw new Error("hunt_proof_download_failed");
+        const decision = await recognizeHuntImage(admin, event, proof);
+        let autoStatus: HuntAutoStatus = decision.status;
+        if (decision.status === "matched" && decision.targetNumber) {
+          const { data: previous } = await admin
+            .from("hunt_submissions")
+            .select("id,status,matched_target_number,auto_status,auto_match_target_number")
+            .eq("hunt_event_id", event.id)
+            .eq("profile_id", user.id)
+            .neq("id", created.id);
+          const alreadyFound = (previous ?? []).some((row) => (
+            row.status === "correct" && row.matched_target_number === decision.targetNumber
+          ) || (
+            row.status === "pending" && row.auto_status === "matched" && row.auto_match_target_number === decision.targetNumber
+          ));
+          if (alreadyFound) autoStatus = "duplicate";
+        }
+        await admin.from("hunt_submissions").update({
+          auto_status: autoStatus,
+          auto_match_target_number: decision.targetNumber,
+          auto_similarity: decision.similarity,
+          auto_candidates: decision.candidates,
+          auto_checked_at: new Date().toISOString(),
+          auto_model: HUNT_EMBEDDING_MODEL,
+        }).eq("id", created.id);
+        if (autoStatus === "matched" && decision.targetNumber) {
+          autoMessage = `自動辨識暫定為 H${String(decision.targetNumber).padStart(3, "0")}，已立即計入暫定數量，仍需人工確認。`;
+        } else if (autoStatus === "duplicate") {
+          autoMessage = "自動辨識為已找到過的同一點位，暫不重複計數，仍會交由人工確認。";
+        } else {
+          autoMessage = "自動辨識無法確定點位，照片已保留並轉交人工審核。";
+        }
+      } catch {
+        await admin.from("hunt_submissions").update({
+          auto_status: "error",
+          auto_checked_at: new Date().toISOString(),
+          auto_model: HUNT_EMBEDDING_MODEL,
+        }).eq("id", created.id);
+        autoMessage = "照片已送出；自動辨識暫時無法完成，將由管理員人工審核。";
+      }
+    }
+  }
+
+  const { data: currentRows } = await admin
+    .from("hunt_submissions")
+    .select("status,matched_target_number,auto_status,auto_match_target_number")
+    .eq("hunt_event_id", event.id)
+    .eq("profile_id", user.id);
+  const progress = calculateHuntProgress((currentRows ?? []) as Array<Pick<HuntSubmissionRecord, "status" | "matched_target_number" | "auto_status" | "auto_match_target_number">>);
+
+  return NextResponse.json({ ok: true, message: autoMessage, submission: created, progress });
 }

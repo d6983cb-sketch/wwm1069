@@ -3,13 +3,20 @@
 alter table public.hunt_reference_images
   add column if not exists content_sha256 text;
 
-alter table public.hunt_reference_images
-  drop constraint if exists hunt_reference_images_content_sha256_check;
-
-alter table public.hunt_reference_images
-  add constraint hunt_reference_images_content_sha256_check
-  check (content_sha256 is null or content_sha256 ~ '^[a-f0-9]{64}$')
-  not valid;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'hunt_reference_images_content_sha256_check'
+      and conrelid = 'public.hunt_reference_images'::regclass
+  ) then
+    alter table public.hunt_reference_images
+      add constraint hunt_reference_images_content_sha256_check
+      check (content_sha256 is null or content_sha256 ~ '^[a-f0-9]{64}$')
+      not valid;
+  end if;
+end
+$$;
 
 create unique index if not exists hunt_reference_images_point_content_sha256_uidx
   on public.hunt_reference_images (reference_point_id, content_sha256)

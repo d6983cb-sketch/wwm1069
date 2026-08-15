@@ -126,7 +126,7 @@ test("player and answer photos remain hidden until the configured reveal instant
 
 test("hunt photo reveal migration is additive and never changes existing submissions or Storage", () => {
   const migration = fs.readFileSync(
-    path.join(process.cwd(), "supabase/migrations/20260815083338_hunt_photo_reveal_schedule.sql"),
+    path.join(process.cwd(), "supabase/migrations/20260815160000_hunt_photo_reveal_schedule.sql"),
     "utf8",
   );
   assert.match(migration, /add column if not exists photo_reveal_at timestamptz/i);

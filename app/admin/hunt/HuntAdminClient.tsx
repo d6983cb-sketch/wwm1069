@@ -76,15 +76,17 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     });
   };
 
-  const uploadReferences = async (formEvent: FormEvent<HTMLFormElement>) => {
+  const uploadReferences = async (formEvent: FormEvent<HTMLFormElement>, fixedTargetNumber?: number) => {
     formEvent.preventDefault();
     if (!event) return setMessage("請先建立尋物活動。");
     const form = new FormData(formEvent.currentTarget);
-    const targetNumber = Number(form.get("targetNumber"));
-    const label = String(form.get("label") ?? "");
+    const targetNumber = fixedTargetNumber ?? Number(form.get("targetNumber"));
+    const label = fixedTargetNumber == null ? String(form.get("label") ?? "") : "";
     const input = formEvent.currentTarget.elements.namedItem("referenceFiles") as HTMLInputElement | null;
-    const files = [...(input?.files ?? [])].slice(0, 5);
+    const selectedFiles = [...(input?.files ?? [])];
+    const files = selectedFiles.slice(0, 10);
     if (!files.length) return setMessage("請至少選擇一張點位參考圖。");
+    if (selectedFiles.length > 10) return setMessage("每次最多新增 10 張輔助辨識照片。");
     setBusy(true);
     setMessage("正在建立圖片辨識索引，請勿關閉頁面…");
     try {
@@ -120,6 +122,16 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveReferencePoint = async (formEvent: FormEvent<HTMLFormElement>, referencePointId: string) => {
+    formEvent.preventDefault();
+    const form = new FormData(formEvent.currentTarget);
+    await action({
+      type: "hunt_reference_point_update",
+      referencePointId,
+      label: form.get("label"),
+    });
   };
 
   const review = async (formEvent: FormEvent<HTMLFormElement>, submissionId: number) => {
@@ -170,12 +182,22 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
       <form onSubmit={uploadReferences}>
         <label>點位<select name="targetNumber" required>{Array.from({ length: event.total_targets }, (_, index) => index + 1).map((number) => <option value={number} key={number}>H{String(number).padStart(3, "0")}</option>)}</select></label>
         <label>點位名稱（選填）<input name="label" maxLength={100} placeholder="例如：竹林入口石牆" /></label>
-        <label className="hunt-file"><span>選擇 1–5 張參考圖</span><input name="referenceFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple required /></label>
+        <label className="hunt-file"><span>選擇 1–10 張參考圖</span><input name="referenceFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple required /></label>
         <button className="primary" disabled={busy || !aiConfigured}>{busy ? "建立索引中…" : "上傳並建立辨識索引"}</button>
       </form>
       <div className="hunt-reference-grid">
         {referencePoints.length ? referencePoints.map((point) => <article key={point.id}>
           <header><b>H{String(point.target_number).padStart(3, "0")}</b><span>{point.label || "未命名點位"}</span><small>{point.images.filter((image) => image.is_active).length} 張啟用</small></header>
+          <div className="hunt-reference-point-tools">
+            <form onSubmit={(formEvent) => saveReferencePoint(formEvent, point.id)}>
+              <label>點位名稱<input name="label" maxLength={100} defaultValue={point.label ?? ""} placeholder="例如：竹林入口石牆" /></label>
+              <button type="submit" disabled={busy}>儲存名稱</button>
+            </form>
+            <form onSubmit={(formEvent) => uploadReferences(formEvent, point.target_number)}>
+              <label className="hunt-file"><span>選擇更多輔助辨識照片</span><small>一次最多 10 張，不會覆蓋原有照片</small><input name="referenceFiles" type="file" accept="image/jpeg,image/png,image/webp" multiple required /></label>
+              <button type="submit" className="primary" disabled={busy || !aiConfigured}>{busy ? "建立索引中…" : "新增照片並建立索引"}</button>
+            </form>
+          </div>
           <div>{point.images.map((reference) => <figure key={reference.id} className={reference.is_active ? "" : "inactive"}>
             {reference.signedUrl ? <Image src={reference.signedUrl} width={240} height={180} alt={`H${point.target_number} 參考圖`} unoptimized /> : <span>圖片無法載入</span>}
             <figcaption><span>{reference.is_active ? "啟用" : "已停用"}</span><div>

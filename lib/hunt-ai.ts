@@ -177,22 +177,33 @@ export function parseHuntVerificationText(text: string) {
     // Some otherwise successful Gemini structured-output responses use JSON5-like
     // unquoted or single-quoted property names. Parse only this fixed schema instead
     // of evaluating arbitrary model output.
-    const numberField = (name: string) => {
-      const match = objectText.match(new RegExp(`["']?${name}["']?\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, "i"));
-      return match ? Number(match[1]) : null;
+    const numberField = (names: string[], percentage = false) => {
+      const key = names.join("|");
+      const match = objectText.match(new RegExp(`["']?(?:${key})["']?\\s*:\\s*["']?(?:H)?(-?(?:\\d+(?:\\.\\d+)?|\\.\\d+))\\s*(%)?["']?`, "i"));
+      if (!match) return null;
+      const numeric = Number(match[1]);
+      return percentage && (match[2] || numeric > 1 && numeric <= 100) ? numeric / 100 : numeric;
     };
-    const booleanField = (name: string) => {
-      const match = objectText.match(new RegExp(`["']?${name}["']?\\s*:\\s*(true|false)`, "i"));
-      return match ? match[1].toLowerCase() === "true" : null;
+    const booleanField = (names: string[]) => {
+      const key = names.join("|");
+      const match = objectText.match(new RegExp(`["']?(?:${key})["']?\\s*:\\s*["']?(true|false|yes|no|1|0|是|否)["']?`, "i"));
+      if (!match) return null;
+      return ["true", "yes", "1", "是"].includes(match[1].toLowerCase());
     };
-    const matchedTargetNumber = numberField("matchedTargetNumber");
-    const confidence = numberField("confidence");
-    const objectVisible = booleanField("objectVisible");
-    const samePhysicalLocation = booleanField("samePhysicalLocation");
+    const matchedTargetNumber = numberField(["matchedTargetNumber", "matched_target_number", "targetNumber", "target_number"]);
+    const confidence = numberField(["confidence", "confidence_score", "score"], true);
+    const objectVisible = booleanField(["objectVisible", "object_visible"]);
+    const samePhysicalLocation = booleanField(["samePhysicalLocation", "same_physical_location", "sameLocation", "same_location"]);
     if (matchedTargetNumber == null || confidence == null || objectVisible == null || samePhysicalLocation == null) {
-      throw new Error("hunt_ai_invalid_verification_json");
+      const missing = [
+        matchedTargetNumber == null ? "target" : "",
+        confidence == null ? "confidence" : "",
+        objectVisible == null ? "visible" : "",
+        samePhysicalLocation == null ? "location" : "",
+      ].filter(Boolean).join("_");
+      throw new Error(`hunt_ai_invalid_verification_json_${missing}`);
     }
-    const reasonMatch = objectText.match(/["']?reason["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,}\n]+))/i);
+    const reasonMatch = objectText.match(/["']?(?:reason|explanation)["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,}\n]+))/i);
     return {
       matchedTargetNumber,
       objectVisible,

@@ -107,7 +107,20 @@ test("visual verification safely accepts schema-shaped JSON5-like output", () =>
     confidence: 0.96,
     reason: "藏物與固定建築位置一致",
   });
-  assert.throws(() => parseHuntVerificationText("not structured output"), /hunt_ai_invalid_verification_json/);
+  assert.deepEqual(parseHuntVerificationText(`{
+    matched_target_number: 'H015',
+    object_visible: 'YES',
+    same_location: '是',
+    confidence_score: '96%',
+    explanation: '固定建築位置一致'
+  }`), {
+    matchedTargetNumber: 15,
+    objectVisible: true,
+    samePhysicalLocation: true,
+    confidence: 0.96,
+    reason: "固定建築位置一致",
+  });
+  assert.throws(() => parseHuntVerificationText("not structured output"), /hunt_ai_invalid_verification_json_target_confidence_visible_location/);
 });
 
 test("hunt AI retries exactly three times after HTTP 429", async () => {

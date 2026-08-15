@@ -323,7 +323,13 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
           <p>{submission.player_note || "玩家未填寫說明"}</p>
           <time>{new Date(submission.submitted_at).toLocaleString("zh-TW")}</time>
           <b className={`hunt-status ${submission.status}`}>{statusLabels[submission.status]}</b>
-          <div className={`hunt-auto-result ${submission.auto_status}`}><b>自動辨識：</b>{submission.auto_status === "matched" ? `暫定 H${String(submission.auto_match_target_number).padStart(3, "0")}` : submission.auto_status === "duplicate" ? "疑似重複點位" : submission.auto_status === "uncertain" ? "不確定，需人工判定" : submission.auto_status === "error" ? "辨識未完成" : "尚未執行"}{submission.auto_similarity != null && <small>相似度 {Math.round(submission.auto_similarity * 100)}%</small>}</div>
+          <div className={`hunt-auto-result ${submission.auto_status}`}>
+            <b>自動辨識：</b>{submission.auto_status === "matched" ? `暫定 H${String(submission.auto_match_target_number).padStart(3, "0")}` : submission.auto_status === "duplicate" ? "疑似重複點位" : submission.auto_status === "uncertain" ? "不確定，需人工判定" : submission.auto_status === "error" ? "辨識未完成" : "尚未執行"}
+            {submission.auto_similarity != null && <small>向量候選 {Math.round(submission.auto_similarity * 100)}%</small>}
+            {submission.auto_verification_confidence != null && <small>視覺核對 {Math.round(submission.auto_verification_confidence * 100)}%</small>}
+            {submission.auto_verification?.reason && <small>{submission.auto_verification.reason}</small>}
+            <button type="button" disabled={busy || !aiConfigured} onClick={() => action({ type: "hunt_submission_reprocess", submissionId: submission.id })}>以二階段視覺重新辨識</button>
+          </div>
           {submission.disqualified && <strong className="form-error">此玩家已取消資格</strong>}
           <form onSubmit={(formEvent) => review(formEvent, submission.id)}>
             <label>判定<select name="status" defaultValue={submission.status === "pending" ? "correct" : submission.status}>

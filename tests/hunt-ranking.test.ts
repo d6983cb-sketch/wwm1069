@@ -12,7 +12,7 @@ import {
   isHuntOpen,
   type HuntEventRecord,
 } from "../lib/hunt.ts";
-import { classifyHuntMatches, fetchHuntAiWith429Retry, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
+import { classifyHuntMatches, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -48,11 +48,49 @@ test("automatic matching requires both threshold and a clear lead", () => {
     targetNumber: 1,
     similarity: 0.86,
     candidates: [{ targetNumber: 1, similarity: 0.86 }, { targetNumber: 2, similarity: 0.75 }],
+    verification: null,
   });
   assert.equal(classifyHuntMatches([
     { target_number: 1, similarity: 0.84 },
     { target_number: 2, similarity: 0.82 },
   ], 0.78, 0.04).status, "uncertain");
+});
+
+test("whole-image similarity alone cannot create a provisional match", () => {
+  const candidates = [
+    { targetNumber: 15, similarity: 0.875387 },
+    { targetNumber: 13, similarity: 0.832598 },
+    { targetNumber: 11, similarity: 0.829507 },
+  ];
+  const rejected = finalizeHuntVisionDecision(candidates, {
+    matchedTargetNumber: 15,
+    objectVisible: false,
+    samePhysicalLocation: false,
+    confidence: 0.88,
+    reason: "只有相似的遊戲場景，找不到藏物標記。",
+  });
+  assert.equal(rejected.status, "uncertain");
+  assert.equal(rejected.targetNumber, null);
+});
+
+test("visual verification must see the object, confirm the location, and reach 90 percent", () => {
+  const candidates = [{ targetNumber: 15, similarity: 0.934583 }];
+  const accepted = finalizeHuntVisionDecision(candidates, {
+    matchedTargetNumber: 15,
+    objectVisible: true,
+    samePhysicalLocation: true,
+    confidence: 0.96,
+    reason: "藏物與牆面、屋簷位置一致。",
+  });
+  assert.equal(accepted.status, "matched");
+  assert.equal(accepted.targetNumber, 15);
+  assert.equal(accepted.similarity, 0.934583);
+
+  const unknownTarget = finalizeHuntVisionDecision(candidates, {
+    ...accepted.verification!,
+    matchedTargetNumber: 14,
+  });
+  assert.equal(unknownTarget.status, "uncertain");
 });
 
 test("hunt AI retries exactly three times after HTTP 429", async () => {
@@ -158,6 +196,28 @@ test("hunt AI migration is additive and keeps all existing proofs and Cos data",
   assert.match(migration, /references public\.hunt_reference_points\(id\) on delete restrict/i);
   assert.match(migration, /alter table public\.hunt_reference_points enable row level security/i);
   assert.match(migration, /revoke all on table public\.hunt_reference_images from anon, authenticated/i);
+});
+
+test("hunt visual verification migration only adds nullable metadata", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815180000_hunt_visual_verification.sql"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists auto_verification jsonb/i);
+  assert.match(migration, /add column if not exists auto_verification_confidence real/i);
+  assert.match(migration, /add column if not exists auto_verification_model text/i);
+  assert.doesNotMatch(migration, /\b(drop|truncate|delete|update|insert)\b/i);
+  assert.doesNotMatch(migration, /storage\.objects/i);
+});
+
+test("admins can reprocess a hunt proof without replacing the proof or manual review", () => {
+  const route = fs.readFileSync(path.join(process.cwd(), "app/api/admin/hunt/route.ts"), "utf8");
+  const block = route.slice(route.indexOf('if (type === "hunt_submission_reprocess")'), route.indexOf('if (type === "hunt_review")'));
+  assert.match(block, /storage\.from\("hunt-proofs"\)\.download\(before\.image_path\)/);
+  assert.match(block, /recognizeHuntImage/);
+  assert.match(block, /auto_verification:/);
+  assert.doesNotMatch(block, /storage\.from\("hunt-proofs"\)\.(remove|upload)/);
+  assert.doesNotMatch(block, /\b(status|matched_target_number|image_path|file_hash):/);
 });
 
 test("ranking counts only correct finds and favors the earlier reached count", () => {

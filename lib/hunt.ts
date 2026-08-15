@@ -8,6 +8,14 @@ export type HuntAutoCandidate = {
   similarity: number;
 };
 
+export type HuntAutoVerification = {
+  matchedTargetNumber: number;
+  objectVisible: boolean;
+  samePhysicalLocation: boolean;
+  confidence: number;
+  reason: string;
+};
+
 export type HuntEventRecord = {
   id: string;
   title: string;
@@ -46,6 +54,9 @@ export type HuntSubmissionRecord = {
   auto_candidates: HuntAutoCandidate[];
   auto_checked_at: string | null;
   auto_model: string | null;
+  auto_verification: HuntAutoVerification | null;
+  auto_verification_confidence: number | null;
+  auto_verification_model: string | null;
 };
 
 export type HuntReferencePoint = {

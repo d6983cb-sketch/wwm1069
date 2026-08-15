@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { calculateHuntProgress, isHuntOpen, type HuntAutoStatus, type HuntEventRecord, type HuntSubmissionRecord } from "@/lib/hunt";
-import { HUNT_EMBEDDING_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
+import { HUNT_AI_PIPELINE_MODEL, HUNT_VERIFICATION_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
 
 export const maxDuration = 60;
 
@@ -122,7 +122,7 @@ export async function POST(request: Request) {
       await admin.from("hunt_submissions").update({
         auto_status: "error",
         auto_checked_at: new Date().toISOString(),
-        auto_model: HUNT_EMBEDDING_MODEL,
+        auto_model: HUNT_AI_PIPELINE_MODEL,
       }).eq("id", created.id);
       autoMessage = "照片已送出；自動辨識暫時未設定，將由管理員人工審核。";
     } else {
@@ -151,7 +151,10 @@ export async function POST(request: Request) {
           auto_similarity: decision.similarity,
           auto_candidates: decision.candidates,
           auto_checked_at: new Date().toISOString(),
-          auto_model: HUNT_EMBEDDING_MODEL,
+          auto_model: HUNT_AI_PIPELINE_MODEL,
+          auto_verification: decision.verification,
+          auto_verification_confidence: decision.verification?.confidence ?? null,
+          auto_verification_model: decision.verification ? HUNT_VERIFICATION_MODEL : null,
         }).eq("id", created.id);
         if (autoStatus === "matched" && decision.targetNumber) {
           autoMessage = `自動辨識暫定為 H${String(decision.targetNumber).padStart(3, "0")}，已立即計入暫定數量，仍需人工確認。`;
@@ -164,7 +167,7 @@ export async function POST(request: Request) {
         await admin.from("hunt_submissions").update({
           auto_status: "error",
           auto_checked_at: new Date().toISOString(),
-          auto_model: HUNT_EMBEDDING_MODEL,
+          auto_model: HUNT_AI_PIPELINE_MODEL,
         }).eq("id", created.id);
         autoMessage = "照片已送出；自動辨識暫時無法完成，將由管理員人工審核。";
       }

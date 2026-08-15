@@ -162,3 +162,20 @@ test("players can delete only their own unconfirmed hunt submissions while the h
   assert.match(client, /刪除這筆錯誤投稿/);
   assert.match(client, /method: "DELETE"/);
 });
+
+test("administrators can edit a reference point and append helper images without replacing its label", () => {
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/admin/hunt/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/admin/hunt/HuntAdminClient.tsx"),
+    "utf8",
+  );
+  assert.match(route, /type === "hunt_reference_point_update"/);
+  assert.match(route, /actionType: "hunt_reference_point_update"/);
+  assert.match(route, /\.\.\.\(label \? \{ label \} : \{\}\)/);
+  assert.match(client, /新增照片並建立索引/);
+  assert.match(client, /不會覆蓋原有照片/);
+  assert.match(client, /saveReferencePoint/);
+});

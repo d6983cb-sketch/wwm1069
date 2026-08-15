@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { calculateHuntProgress, calculateHuntRanking, canShowHuntRanking, isHuntOpen, type HuntEventRecord } from "../lib/hunt.ts";
+import {
+  calculateHuntProgress,
+  calculateHuntRanking,
+  canShowHuntAnswerPhotos,
+  canShowHuntPlayerPhotos,
+  canShowHuntRanking,
+  hasReachedHuntPhotoRevealTime,
+  isHuntOpen,
+  type HuntEventRecord,
+} from "../lib/hunt.ts";
 import { classifyHuntMatches, fetchHuntAiWith429Retry, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
@@ -19,6 +28,9 @@ const event: HuntEventRecord = {
   auto_match_enabled: false,
   auto_match_threshold: 0.78,
   auto_match_margin: 0.04,
+  photo_reveal_at: null,
+  reveal_player_photos: false,
+  reveal_answer_photos: false,
 };
 
 test("hunt opens only during the configured open window", () => {
@@ -95,6 +107,42 @@ test("hidden ranking stays hidden until results are published", () => {
   assert.equal(canShowHuntRanking(event), false);
   assert.equal(canShowHuntRanking({ ...event, leaderboard_mode: "live" }), true);
   assert.equal(canShowHuntRanking({ ...event, status: "results_published" }), true);
+});
+
+test("player and answer photos remain hidden until the configured reveal instant", () => {
+  const scheduled = {
+    ...event,
+    photo_reveal_at: "2026-08-20T12:00:00.000Z",
+    reveal_player_photos: true,
+    reveal_answer_photos: true,
+  };
+  assert.equal(hasReachedHuntPhotoRevealTime(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntPlayerPhotos(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntAnswerPhotos(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntPlayerPhotos(scheduled, Date.parse("2026-08-20T12:00:00.000Z")), true);
+  assert.equal(canShowHuntAnswerPhotos(scheduled, Date.parse("2026-08-20T12:00:00.000Z")), true);
+  assert.equal(canShowHuntAnswerPhotos({ ...scheduled, reveal_answer_photos: false }, Date.parse("2026-08-20T12:00:00.000Z")), false);
+});
+
+test("hunt photo reveal migration is additive and never changes existing submissions or Storage", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815083338_hunt_photo_reveal_schedule.sql"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists photo_reveal_at timestamptz/i);
+  assert.match(migration, /add column if not exists reveal_player_photos boolean not null default false/i);
+  assert.match(migration, /add column if not exists reveal_answer_photos boolean not null default false/i);
+  assert.doesNotMatch(migration, /\b(drop|truncate|delete|update)\b/i);
+  assert.doesNotMatch(migration, /storage\.objects/i);
+});
+
+test("public hunt page creates private signed URLs only after server-side reveal checks", () => {
+  const page = fs.readFileSync(path.join(process.cwd(), "app/hunt/page.tsx"), "utf8");
+  assert.match(page, /if \(event && canShowHuntPlayerPhotos\(event\)\)/);
+  assert.match(page, /if \(event && canShowHuntAnswerPhotos\(event\)\)/);
+  assert.match(page, /\.eq\("status", "correct"\)/);
+  assert.match(page, /storage\.from\("hunt-proofs"\)\.createSignedUrl/);
+  assert.match(page, /storage\.from\("hunt-references"\)\.createSignedUrl/);
 });
 
 test("hunt AI migration is additive and keeps all existing proofs and Cos data", () => {

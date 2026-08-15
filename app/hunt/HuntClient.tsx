@@ -11,7 +11,19 @@ import {
   validateReplacementPhoto,
   withUploadTimeout,
 } from "@/lib/client-image-upload";
-import { calculateHuntProgress, canShowHuntRanking, isHuntOpen, type HuntEventRecord, type HuntRankingRow, type HuntSubmissionRecord } from "@/lib/hunt";
+import {
+  calculateHuntProgress,
+  canShowHuntAnswerPhotos,
+  canShowHuntPlayerPhotos,
+  canShowHuntRanking,
+  hasReachedHuntPhotoRevealTime,
+  isHuntOpen,
+  type HuntEventRecord,
+  type HuntPublicAnswerPhoto,
+  type HuntPublicPlayerPhoto,
+  type HuntRankingRow,
+  type HuntSubmissionRecord,
+} from "@/lib/hunt";
 
 type OwnSubmission = HuntSubmissionRecord & { signedUrl: string | null };
 type PendingPhotoStatus = "ready" | "processing" | "success" | "error";
@@ -44,6 +56,8 @@ export default function HuntClient({
   disqualified,
   submissions,
   ranking,
+  publicPlayerPhotos,
+  publicAnswerPhotos,
 }: {
   event: HuntEventRecord | null;
   userId: string | null;
@@ -51,6 +65,8 @@ export default function HuntClient({
   disqualified: boolean;
   submissions: OwnSubmission[];
   ranking: HuntRankingRow[];
+  publicPlayerPhotos: HuntPublicPlayerPhoto[];
+  publicAnswerPhotos: HuntPublicAnswerPhoto[];
 }) {
   const router = useRouter();
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
@@ -69,6 +85,9 @@ export default function HuntClient({
     for (const photo of photosRef.current) URL.revokeObjectURL(photo.previewUrl);
   }, []);
   const open = isHuntOpen(event);
+  const photoRevealReached = hasReachedHuntPhotoRevealTime(event);
+  const showPlayerPhotos = canShowHuntPlayerPhotos(event);
+  const showAnswerPhotos = canShowHuntAnswerPhotos(event);
 
   const signIn = async () => {
     const supabase = createClient();
@@ -301,6 +320,35 @@ export default function HuntClient({
             >{deletingId === submission.id ? "刪除中…" : "刪除這筆錯誤投稿"}</button>}
           </article>)}
         </div> : <p className="muted">尚未上傳照片。</p>}
+      </section>}
+
+      {(event.reveal_player_photos || event.reveal_answer_photos) && <section className="hunt-public-photos">
+        <header>
+          <div><h2>活動照片公開區</h2><p>只有管理員人工確認正確的玩家照片與啟用中的答案照片會在這裡顯示。</p></div>
+          {event.photo_reveal_at && <time>{photoRevealReached ? "已公開" : `預計 ${new Date(event.photo_reveal_at).toLocaleString("zh-TW")} 公開`}</time>}
+        </header>
+        {!photoRevealReached ? (
+          <div className="hunt-photo-locked"><i>鎖</i><b>公開時間尚未到達</b><span>其他玩家的投稿照片與答案圖仍保持隱藏。</span></div>
+        ) : <>
+          {event.reveal_player_photos && <div className="hunt-public-photo-group">
+            <h3>玩家找到的正確照片</h3>
+            {showPlayerPhotos && publicPlayerPhotos.length ? <div className="hunt-public-photo-grid">
+              {publicPlayerPhotos.map((photo) => <figure key={`player-${photo.id}`}>
+                <Image src={photo.signedUrl} width={360} height={270} alt={`${photo.nickname} 找到的 H${String(photo.targetNumber).padStart(3, "0")}`} unoptimized />
+                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.nickname}</span></figcaption>
+              </figure>)}
+            </div> : <p className="muted">目前沒有可公開的正確照片。</p>}
+          </div>}
+          {event.reveal_answer_photos && <div className="hunt-public-photo-group">
+            <h3>答案與點位參考照片</h3>
+            {showAnswerPhotos && publicAnswerPhotos.length ? <div className="hunt-public-photo-grid">
+              {publicAnswerPhotos.map((photo) => <figure key={`answer-${photo.id}`}>
+                <Image src={photo.signedUrl} width={360} height={270} alt={`H${String(photo.targetNumber).padStart(3, "0")} 答案照片`} unoptimized />
+                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.label || "未命名點位"}</span></figcaption>
+              </figure>)}
+            </div> : <p className="muted">目前沒有啟用中的答案照片。</p>}
+          </div>}
+        </>}
       </section>}
 
       <section className="hunt-ranking">

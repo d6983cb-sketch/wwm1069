@@ -41,12 +41,20 @@ export async function POST(request: Request) {
     const totalTargets = Number(body.totalTargets);
     const autoMatchThreshold = Number(body.autoMatchThreshold ?? 0.78);
     const autoMatchMargin = Number(body.autoMatchMargin ?? 0.04);
+    const photoRevealAtRaw = String(body.photoRevealAt ?? "").trim();
+    const photoRevealAt = photoRevealAtRaw ? Date.parse(photoRevealAtRaw) : null;
+    const revealPlayerPhotos = body.revealPlayerPhotos === true;
+    const revealAnswerPhotos = body.revealAnswerPhotos === true;
     if (!title || title.length > 100) return json("invalid_title", "活動名稱不可空白，且最多 100 字。", 400);
     if (!Number.isInteger(totalTargets) || totalTargets < 1 || totalTargets > 999) return json("invalid_target_count", "藏物總數必須介於 1 至 999。", 400);
     if (!statuses.includes(status) || !leaderboardModes.includes(leaderboardMode)) return json("invalid_settings", "活動狀態或排行榜設定不正確。", 400);
     if (!Number.isFinite(autoMatchThreshold) || autoMatchThreshold < 0 || autoMatchThreshold > 1) return json("invalid_threshold", "自動辨識門檻必須介於 0 至 1。", 400);
     if (!Number.isFinite(autoMatchMargin) || autoMatchMargin < 0 || autoMatchMargin > 0.5) return json("invalid_margin", "候選差距必須介於 0 至 0.5。", 400);
     if (body.autoMatchEnabled === true && !isHuntAiConfigured()) return json("ai_not_configured", "尚未設定 Gemini API Key，不能開啟自動辨識。", 422);
+    if (photoRevealAtRaw && !Number.isFinite(photoRevealAt)) return json("invalid_reveal_time", "照片公開時間格式不正確。", 400);
+    if ((revealPlayerPhotos || revealAnswerPhotos) && photoRevealAt === null) {
+      return json("reveal_time_required", "開啟照片公開功能時，必須設定公開時間。", 400);
+    }
     if (!Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt)) || Date.parse(startsAt) >= Date.parse(endsAt)) {
       return json("invalid_time", "活動開始時間必須早於結束時間。", 400);
     }
@@ -63,6 +71,9 @@ export async function POST(request: Request) {
       auto_match_enabled: body.autoMatchEnabled === true,
       auto_match_threshold: autoMatchThreshold,
       auto_match_margin: autoMatchMargin,
+      photo_reveal_at: photoRevealAt === null ? null : new Date(photoRevealAt).toISOString(),
+      reveal_player_photos: revealPlayerPhotos,
+      reveal_answer_photos: revealAnswerPhotos,
       updated_at: new Date().toISOString(),
     };
     const { data: before } = eventId

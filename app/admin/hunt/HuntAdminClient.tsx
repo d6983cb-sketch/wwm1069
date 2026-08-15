@@ -132,6 +132,16 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     formEvent.preventDefault();
     const form = new FormData(formEvent.currentTarget);
     const nextStatus = String(form.get("status"));
+    const photoRevealAtValue = String(form.get("photoRevealAt") ?? "").trim();
+    const revealPlayerPhotos = form.get("revealPlayerPhotos") === "on";
+    const revealAnswerPhotos = form.get("revealAnswerPhotos") === "on";
+    if ((revealPlayerPhotos || revealAnswerPhotos) && !photoRevealAtValue) {
+      setMessage("開啟照片公開功能時，必須設定公開時間。");
+      return;
+    }
+    if ((revealPlayerPhotos || revealAnswerPhotos) && Date.parse(taipeiInputToIso(photoRevealAtValue)) <= Date.now()) {
+      if (!confirm("照片公開時間已經到達；儲存後，已勾選的玩家照片或答案照片會立即對所有訪客公開。確定儲存？")) return;
+    }
     if (["closed", "results_published", "archived"].includes(nextStatus)) {
       if (!confirm(`確定將尋物活動切換為「${nextStatus}」？這會立即影響玩家上傳及排行榜。`)) return;
     }
@@ -149,6 +159,9 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
       autoMatchEnabled: form.get("autoMatchEnabled") === "on",
       autoMatchThreshold: Number(form.get("autoMatchThreshold")),
       autoMatchMargin: Number(form.get("autoMatchMargin")),
+      photoRevealAt: photoRevealAtValue ? taipeiInputToIso(photoRevealAtValue) : null,
+      revealPlayerPhotos,
+      revealAnswerPhotos,
     });
   };
 
@@ -245,6 +258,12 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
           <option value="hidden">活動期間隱藏</option><option value="live">即時公開</option><option value="final">結果公布後顯示</option>
         </select></label>
         <label className="setting-check"><input name="showTargetImage" type="checkbox" defaultChecked={event?.show_target_image === true} /><span><b>向玩家顯示目標物參考圖片</b><small>關閉時只顯示活動文字，不顯示圖一。</small></span></label>
+        <fieldset className="hunt-reveal-settings">
+          <legend>照片定時公開</legend>
+          <label>公開時間（台北時間）<input name="photoRevealAt" type="datetime-local" defaultValue={event?.photo_reveal_at ? toTaipeiInput(event.photo_reveal_at) : ""} /><small>時間未到以前，伺服器不會提供他人投稿或答案照片的觀看網址。</small></label>
+          <label className="setting-check"><input name="revealPlayerPhotos" type="checkbox" defaultChecked={event?.reveal_player_photos === true} /><span><b>公開玩家正確照片</b><small>只公開已由管理員確認為正確的照片，不公開待審、錯誤或重複照片。</small></span></label>
+          <label className="setting-check"><input name="revealAnswerPhotos" type="checkbox" defaultChecked={event?.reveal_answer_photos === true} /><span><b>公開答案／點位參考照片</b><small>公開啟用中的點位名稱與輔助辨識參考圖。</small></span></label>
+        </fieldset>
         <label className="setting-check"><input name="autoMatchEnabled" type="checkbox" defaultChecked={event?.auto_match_enabled === true} disabled={!aiConfigured} /><span><b>開啟上傳後自動辨識</b><small>{aiConfigured ? "立即顯示暫定點位與數量，人工審核後才成為正式結果。" : "尚未設定 Gemini API Key，因此目前不能開啟。"}</small></span></label>
         <label>辨識相似度門檻<input name="autoMatchThreshold" type="number" min={0.5} max={0.99} step={0.01} defaultValue={event?.auto_match_threshold ?? 0.78} /><small>建議先使用 0.78；數值越高越嚴格。</small></label>
         <label>第一、第二候選最小差距<input name="autoMatchMargin" type="number" min={0} max={0.3} step={0.01} defaultValue={event?.auto_match_margin ?? 0.04} /><small>差距不足時自動轉人工審核，建議 0.04。</small></label>

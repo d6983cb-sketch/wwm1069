@@ -12,7 +12,7 @@ import {
   isHuntOpen,
   type HuntEventRecord,
 } from "../lib/hunt.ts";
-import { classifyHuntMatches, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
+import { classifyHuntMatches, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, parseHuntVerificationText, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -91,6 +91,23 @@ test("visual verification must see the object, confirm the location, and reach 9
     matchedTargetNumber: 14,
   });
   assert.equal(unknownTarget.status, "uncertain");
+});
+
+test("visual verification safely accepts schema-shaped JSON5-like output", () => {
+  assert.deepEqual(parseHuntVerificationText(`{
+    matchedTargetNumber: 15,
+    objectVisible: true,
+    samePhysicalLocation: true,
+    confidence: 0.96,
+    reason: '藏物與固定建築位置一致'
+  }`), {
+    matchedTargetNumber: 15,
+    objectVisible: true,
+    samePhysicalLocation: true,
+    confidence: 0.96,
+    reason: "藏物與固定建築位置一致",
+  });
+  assert.throws(() => parseHuntVerificationText("not structured output"), /hunt_ai_invalid_verification_json/);
 });
 
 test("hunt AI retries exactly three times after HTTP 429", async () => {

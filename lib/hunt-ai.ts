@@ -159,6 +159,50 @@ function normalizeVerification(value: unknown, allowedTargets: number[]): HuntAu
   };
 }
 
+export function parseHuntVerificationText(text: string) {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  const objectText = firstBrace >= 0 && lastBrace > firstBrace
+    ? cleaned.slice(firstBrace, lastBrace + 1)
+    : cleaned;
+
+  try {
+    return JSON.parse(objectText) as unknown;
+  } catch {
+    // Some otherwise successful Gemini structured-output responses use JSON5-like
+    // unquoted or single-quoted property names. Parse only this fixed schema instead
+    // of evaluating arbitrary model output.
+    const numberField = (name: string) => {
+      const match = objectText.match(new RegExp(`["']?${name}["']?\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, "i"));
+      return match ? Number(match[1]) : null;
+    };
+    const booleanField = (name: string) => {
+      const match = objectText.match(new RegExp(`["']?${name}["']?\\s*:\\s*(true|false)`, "i"));
+      return match ? match[1].toLowerCase() === "true" : null;
+    };
+    const matchedTargetNumber = numberField("matchedTargetNumber");
+    const confidence = numberField("confidence");
+    const objectVisible = booleanField("objectVisible");
+    const samePhysicalLocation = booleanField("samePhysicalLocation");
+    if (matchedTargetNumber == null || confidence == null || objectVisible == null || samePhysicalLocation == null) {
+      throw new Error("hunt_ai_invalid_verification_json");
+    }
+    const reasonMatch = objectText.match(/["']?reason["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^,}\n]+))/i);
+    return {
+      matchedTargetNumber,
+      objectVisible,
+      samePhysicalLocation,
+      confidence,
+      reason: (reasonMatch?.[1] ?? reasonMatch?.[2] ?? reasonMatch?.[3] ?? "視覺模型未提供判定理由。").trim(),
+    };
+  }
+}
+
 type ReferenceForVerification = {
   targetNumber: number;
   label: string | null;
@@ -232,7 +276,7 @@ export async function verifyHuntCandidateImages(
       };
       const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
       if (!text) throw new Error("hunt_ai_invalid_verification");
-      return normalizeVerification(JSON.parse(text), allowedTargets);
+      return normalizeVerification(parseHuntVerificationText(text), allowedTargets);
     } finally {
       clearTimeout(timer);
     }

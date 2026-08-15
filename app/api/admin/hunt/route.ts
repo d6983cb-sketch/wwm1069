@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { authorizeAdmin, writeAuditLog } from "@/lib/admin-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { embedHuntImage, HUNT_EMBEDDING_MODEL, isHuntAiConfigured } from "@/lib/hunt-ai";
-import type { HuntEventStatus, HuntLeaderboardMode, HuntReviewStatus } from "@/lib/hunt";
+import { embedHuntImage, HUNT_AI_PIPELINE_MODEL, HUNT_EMBEDDING_MODEL, HUNT_VERIFICATION_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
+import type { HuntAutoStatus, HuntEventRecord, HuntEventStatus, HuntLeaderboardMode, HuntReviewStatus } from "@/lib/hunt";
 
 export const maxDuration = 60;
 
@@ -24,7 +24,7 @@ function referencePath(eventId: string, targetNumber: number, value: unknown) {
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const type = String(body.type ?? "");
-  const permission = type === "hunt_review" ? "submission_manager" : "event_manager";
+  const permission = ["hunt_review", "hunt_submission_reprocess"].includes(type) ? "submission_manager" : "event_manager";
   const auth = await authorizeAdmin(request, permission);
   if (!auth.ok) return auth.response;
   const { context } = auth;
@@ -41,12 +41,20 @@ export async function POST(request: Request) {
     const totalTargets = Number(body.totalTargets);
     const autoMatchThreshold = Number(body.autoMatchThreshold ?? 0.78);
     const autoMatchMargin = Number(body.autoMatchMargin ?? 0.04);
+    const photoRevealAtRaw = String(body.photoRevealAt ?? "").trim();
+    const photoRevealAt = photoRevealAtRaw ? Date.parse(photoRevealAtRaw) : null;
+    const revealPlayerPhotos = body.revealPlayerPhotos === true;
+    const revealAnswerPhotos = body.revealAnswerPhotos === true;
     if (!title || title.length > 100) return json("invalid_title", "活動名稱不可空白，且最多 100 字。", 400);
     if (!Number.isInteger(totalTargets) || totalTargets < 1 || totalTargets > 999) return json("invalid_target_count", "藏物總數必須介於 1 至 999。", 400);
     if (!statuses.includes(status) || !leaderboardModes.includes(leaderboardMode)) return json("invalid_settings", "活動狀態或排行榜設定不正確。", 400);
     if (!Number.isFinite(autoMatchThreshold) || autoMatchThreshold < 0 || autoMatchThreshold > 1) return json("invalid_threshold", "自動辨識門檻必須介於 0 至 1。", 400);
     if (!Number.isFinite(autoMatchMargin) || autoMatchMargin < 0 || autoMatchMargin > 0.5) return json("invalid_margin", "候選差距必須介於 0 至 0.5。", 400);
     if (body.autoMatchEnabled === true && !isHuntAiConfigured()) return json("ai_not_configured", "尚未設定 Gemini API Key，不能開啟自動辨識。", 422);
+    if (photoRevealAtRaw && !Number.isFinite(photoRevealAt)) return json("invalid_reveal_time", "照片公開時間格式不正確。", 400);
+    if ((revealPlayerPhotos || revealAnswerPhotos) && photoRevealAt === null) {
+      return json("reveal_time_required", "開啟照片公開功能時，必須設定公開時間。", 400);
+    }
     if (!Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt)) || Date.parse(startsAt) >= Date.parse(endsAt)) {
       return json("invalid_time", "活動開始時間必須早於結束時間。", 400);
     }
@@ -63,6 +71,9 @@ export async function POST(request: Request) {
       auto_match_enabled: body.autoMatchEnabled === true,
       auto_match_threshold: autoMatchThreshold,
       auto_match_margin: autoMatchMargin,
+      photo_reveal_at: photoRevealAt === null ? null : new Date(photoRevealAt).toISOString(),
+      reveal_player_photos: revealPlayerPhotos,
+      reveal_answer_photos: revealAnswerPhotos,
       updated_at: new Date().toISOString(),
     };
     const { data: before } = eventId
@@ -85,13 +96,31 @@ export async function POST(request: Request) {
     const eventId = String(body.eventId ?? "");
     const targetNumber = Number(body.targetNumber);
     const mimeType = String(body.mimeType ?? "");
-    if (!eventId || !Number.isInteger(targetNumber) || !["image/jpeg", "image/png"].includes(mimeType)) {
+    const fileHash = String(body.fileHash ?? "").toLowerCase();
+    if (!eventId || !Number.isInteger(targetNumber) || !["image/jpeg", "image/png"].includes(mimeType) || !/^[a-f0-9]{64}$/.test(fileHash)) {
       return json("invalid_reference", "參考點位或圖片格式不正確。", 400);
     }
     const { data: event } = await admin.from("hunt_events").select("id,total_targets,status").eq("id", eventId).maybeSingle();
     if (!event) return json("event_not_found", "找不到尋物活動。", 404);
     if (event.status === "archived") return json("event_archived", "活動已封存，不能新增參考圖。", 422);
     if (targetNumber < 1 || targetNumber > event.total_targets) return json("invalid_target", `點位必須介於 1 至 ${event.total_targets}。`, 400);
+    const { data: existingPoint, error: pointLookupError } = await admin
+      .from("hunt_reference_points")
+      .select("id")
+      .eq("hunt_event_id", event.id)
+      .eq("target_number", targetNumber)
+      .maybeSingle();
+    if (pointLookupError) return json("reference_lookup_failed", "無法檢查參考圖是否重複。", 500);
+    if (existingPoint) {
+      const { data: duplicate, error: duplicateLookupError } = await admin
+        .from("hunt_reference_images")
+        .select("id")
+        .eq("reference_point_id", existingPoint.id)
+        .eq("content_sha256", fileHash)
+        .maybeSingle();
+      if (duplicateLookupError) return json("reference_lookup_failed", "無法檢查參考圖是否重複。", 500);
+      if (duplicate) return json("duplicate_reference", "這張參考圖已經存在，不需要重複上傳。", 409);
+    }
     const extension = mimeType === "image/png" ? "png" : "jpg";
     const imagePath = `${event.id}/H${String(targetNumber).padStart(3, "0")}/${crypto.randomUUID()}.${extension}`;
     const { data, error } = await admin.storage.from("hunt-references").createSignedUploadUrl(imagePath);
@@ -145,8 +174,9 @@ export async function POST(request: Request) {
     const targetNumber = Number(body.targetNumber);
     const label = String(body.label ?? "").trim().slice(0, 100);
     const mimeType = String(body.mimeType ?? "") as "image/jpeg" | "image/png";
+    const fileHash = String(body.fileHash ?? "").toLowerCase();
     const imagePath = referencePath(eventId, targetNumber, body.imagePath);
-    if (!eventId || !Number.isInteger(targetNumber) || !imagePath || !["image/jpeg", "image/png"].includes(mimeType)) {
+    if (!eventId || !Number.isInteger(targetNumber) || !imagePath || !["image/jpeg", "image/png"].includes(mimeType) || !/^[a-f0-9]{64}$/.test(fileHash)) {
       return json("invalid_reference", "參考圖資料不正確。", 400);
     }
     const { data: event } = await admin.from("hunt_events").select("id,total_targets,status").eq("id", eventId).maybeSingle();
@@ -155,9 +185,6 @@ export async function POST(request: Request) {
     if (targetNumber < 1 || targetNumber > event.total_targets) return json("invalid_target", `點位必須介於 1 至 ${event.total_targets}。`, 400);
     if (!isHuntAiConfigured()) return json("ai_not_configured", "尚未設定 Gemini API Key，無法建立圖片向量。", 422);
     try {
-      const { data: image, error: downloadError } = await admin.storage.from("hunt-references").download(imagePath);
-      if (downloadError || !image) throw new Error("reference_download_failed");
-      const embedding = await embedHuntImage(image);
       const { data: existingPoint, error: pointLookupError } = await admin
         .from("hunt_reference_points")
         .select("*")
@@ -165,6 +192,22 @@ export async function POST(request: Request) {
         .eq("target_number", targetNumber)
         .maybeSingle();
       if (pointLookupError) throw new Error("reference_point_lookup_failed");
+      if (existingPoint) {
+        const { data: duplicate, error: duplicateLookupError } = await admin
+          .from("hunt_reference_images")
+          .select("id")
+          .eq("reference_point_id", existingPoint.id)
+          .eq("content_sha256", fileHash)
+          .maybeSingle();
+        if (duplicateLookupError) throw new Error("reference_duplicate_lookup_failed");
+        if (duplicate) {
+          await admin.storage.from("hunt-references").remove([imagePath]);
+          return json("duplicate_reference", "這張參考圖已經存在，新上傳的重複檔案已安全移除。", 409);
+        }
+      }
+      const { data: image, error: downloadError } = await admin.storage.from("hunt-references").download(imagePath);
+      if (downloadError || !image) throw new Error("reference_download_failed");
+      const embedding = await embedHuntImage(image);
       const pointQuery = existingPoint
         ? admin.from("hunt_reference_points").update({
           ...(label ? { label } : {}),
@@ -186,10 +229,15 @@ export async function POST(request: Request) {
         reference_point_id: point.id,
         image_path: imagePath,
         mime_type: mimeType,
+        content_sha256: fileHash,
         embedding,
         embedding_model: HUNT_EMBEDDING_MODEL,
         created_by: context.profile.id,
       }).select("id,image_path,reference_point_id,embedding_model,is_active,created_at").single();
+      if (imageError?.code === "23505") {
+        await admin.storage.from("hunt-references").remove([imagePath]);
+        return json("duplicate_reference", "這張參考圖已經存在，新上傳的重複檔案已安全移除。", 409);
+      }
       if (imageError || !created) throw new Error("reference_image_failed");
       await writeAuditLog({ context, actionType: "hunt_reference_create", targetType: "hunt_reference_image", targetId: created.id, afterData: { ...created, target_number: targetNumber } });
       return NextResponse.json({ ok: true, message: `H${String(targetNumber).padStart(3, "0")} 參考圖已建立並完成辨識索引。` });
@@ -226,6 +274,69 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, message: "參考圖辨識索引已重新建立。" });
     } catch {
       return json("reference_reprocess_failed", "重新建立索引失敗，舊索引與原圖未變更。", 500);
+    }
+  }
+
+  if (type === "hunt_submission_reprocess") {
+    const submissionId = Number(body.submissionId);
+    if (!Number.isInteger(submissionId)) return json("invalid_submission", "尋物投稿編號不正確。", 400);
+    if (!isHuntAiConfigured()) return json("ai_not_configured", "尚未設定 Gemini API Key，無法重新辨識。", 422);
+    const { data: before } = await admin.from("hunt_submissions").select("*").eq("id", submissionId).maybeSingle();
+    if (!before) return json("submission_not_found", "找不到這張尋物照片。", 404);
+    const { data: eventData } = await admin.from("hunt_events").select("*").eq("id", before.hunt_event_id).maybeSingle();
+    if (!eventData) return json("event_not_found", "找不到尋物活動。", 404);
+    if (eventData.status === "archived") return json("event_archived", "活動已封存，不能重新辨識。", 422);
+    try {
+      const { data: proof, error: downloadError } = await admin.storage.from("hunt-proofs").download(before.image_path);
+      if (downloadError || !proof) throw new Error("hunt_proof_download_failed");
+      const decision = await recognizeHuntImage(admin, eventData as HuntEventRecord, proof);
+      let autoStatus: HuntAutoStatus = decision.status;
+      if (decision.status === "matched" && decision.targetNumber) {
+        const { data: previous } = await admin
+          .from("hunt_submissions")
+          .select("id,status,matched_target_number,auto_status,auto_match_target_number")
+          .eq("hunt_event_id", before.hunt_event_id)
+          .eq("profile_id", before.profile_id)
+          .neq("id", before.id);
+        const alreadyFound = (previous ?? []).some((row) => (
+          row.status === "correct" && row.matched_target_number === decision.targetNumber
+        ) || (
+          row.status === "pending" && row.auto_status === "matched" && row.auto_match_target_number === decision.targetNumber
+        ));
+        if (alreadyFound) autoStatus = "duplicate";
+      }
+      const update = {
+        auto_status: autoStatus,
+        auto_match_target_number: decision.targetNumber,
+        auto_similarity: decision.similarity,
+        auto_candidates: decision.candidates,
+        auto_checked_at: new Date().toISOString(),
+        auto_model: HUNT_AI_PIPELINE_MODEL,
+        auto_verification: decision.verification,
+        auto_verification_confidence: decision.verification?.confidence ?? null,
+        auto_verification_model: decision.verification ? HUNT_VERIFICATION_MODEL : null,
+        updated_at: new Date().toISOString(),
+      };
+      const { data: after, error } = await admin.from("hunt_submissions").update(update).eq("id", before.id).select("*").single();
+      if (error || !after) throw new Error("hunt_submission_reprocess_update_failed");
+      await writeAuditLog({
+        context,
+        actionType: "hunt_submission_reprocess",
+        targetType: "hunt_submission",
+        targetId: before.id,
+        beforeData: before,
+        afterData: after,
+      });
+      return NextResponse.json({
+        ok: true,
+        message: autoStatus === "matched" && decision.targetNumber
+          ? `已通過二階段視覺核對，暫定為 H${String(decision.targetNumber).padStart(3, "0")}。`
+          : autoStatus === "duplicate"
+            ? "已通過視覺核對，但玩家已有同一點位，暫列重複。"
+            : "視覺證據不足，已改列不確定並保留人工審核。",
+      });
+    } catch {
+      return json("submission_reprocess_failed", "重新辨識失敗，原辨識結果與照片完全未變更。", 500);
     }
   }
 

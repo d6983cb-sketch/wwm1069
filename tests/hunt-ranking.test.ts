@@ -2,8 +2,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { calculateHuntProgress, calculateHuntRanking, canShowHuntRanking, isHuntOpen, type HuntEventRecord } from "../lib/hunt.ts";
-import { classifyHuntMatches, fetchHuntAiWith429Retry, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
+import {
+  calculateHuntProgress,
+  calculateHuntRanking,
+  canShowHuntAnswerPhotos,
+  canShowHuntPlayerPhotos,
+  canShowHuntRanking,
+  hasReachedHuntPhotoRevealTime,
+  isHuntOpen,
+  type HuntEventRecord,
+} from "../lib/hunt.ts";
+import { classifyHuntMatches, fetchHuntAiWith429Retry, finalizeHuntVisionDecision, HUNT_AI_MAX_429_RETRIES, withHuntAiQueue } from "../lib/hunt-ai.ts";
 
 const event: HuntEventRecord = {
   id: "hunt-1",
@@ -19,6 +28,9 @@ const event: HuntEventRecord = {
   auto_match_enabled: false,
   auto_match_threshold: 0.78,
   auto_match_margin: 0.04,
+  photo_reveal_at: null,
+  reveal_player_photos: false,
+  reveal_answer_photos: false,
 };
 
 test("hunt opens only during the configured open window", () => {
@@ -36,11 +48,49 @@ test("automatic matching requires both threshold and a clear lead", () => {
     targetNumber: 1,
     similarity: 0.86,
     candidates: [{ targetNumber: 1, similarity: 0.86 }, { targetNumber: 2, similarity: 0.75 }],
+    verification: null,
   });
   assert.equal(classifyHuntMatches([
     { target_number: 1, similarity: 0.84 },
     { target_number: 2, similarity: 0.82 },
   ], 0.78, 0.04).status, "uncertain");
+});
+
+test("whole-image similarity alone cannot create a provisional match", () => {
+  const candidates = [
+    { targetNumber: 15, similarity: 0.875387 },
+    { targetNumber: 13, similarity: 0.832598 },
+    { targetNumber: 11, similarity: 0.829507 },
+  ];
+  const rejected = finalizeHuntVisionDecision(candidates, {
+    matchedTargetNumber: 15,
+    objectVisible: false,
+    samePhysicalLocation: false,
+    confidence: 0.88,
+    reason: "只有相似的遊戲場景，找不到藏物標記。",
+  });
+  assert.equal(rejected.status, "uncertain");
+  assert.equal(rejected.targetNumber, null);
+});
+
+test("visual verification must see the object, confirm the location, and reach 90 percent", () => {
+  const candidates = [{ targetNumber: 15, similarity: 0.934583 }];
+  const accepted = finalizeHuntVisionDecision(candidates, {
+    matchedTargetNumber: 15,
+    objectVisible: true,
+    samePhysicalLocation: true,
+    confidence: 0.96,
+    reason: "藏物與牆面、屋簷位置一致。",
+  });
+  assert.equal(accepted.status, "matched");
+  assert.equal(accepted.targetNumber, 15);
+  assert.equal(accepted.similarity, 0.934583);
+
+  const unknownTarget = finalizeHuntVisionDecision(candidates, {
+    ...accepted.verification!,
+    matchedTargetNumber: 14,
+  });
+  assert.equal(unknownTarget.status, "uncertain");
 });
 
 test("hunt AI retries exactly three times after HTTP 429", async () => {
@@ -97,6 +147,42 @@ test("hidden ranking stays hidden until results are published", () => {
   assert.equal(canShowHuntRanking({ ...event, status: "results_published" }), true);
 });
 
+test("player and answer photos remain hidden until the configured reveal instant", () => {
+  const scheduled = {
+    ...event,
+    photo_reveal_at: "2026-08-20T12:00:00.000Z",
+    reveal_player_photos: true,
+    reveal_answer_photos: true,
+  };
+  assert.equal(hasReachedHuntPhotoRevealTime(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntPlayerPhotos(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntAnswerPhotos(scheduled, Date.parse("2026-08-20T11:59:59.000Z")), false);
+  assert.equal(canShowHuntPlayerPhotos(scheduled, Date.parse("2026-08-20T12:00:00.000Z")), true);
+  assert.equal(canShowHuntAnswerPhotos(scheduled, Date.parse("2026-08-20T12:00:00.000Z")), true);
+  assert.equal(canShowHuntAnswerPhotos({ ...scheduled, reveal_answer_photos: false }, Date.parse("2026-08-20T12:00:00.000Z")), false);
+});
+
+test("hunt photo reveal migration is additive and never changes existing submissions or Storage", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815160000_hunt_photo_reveal_schedule.sql"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists photo_reveal_at timestamptz/i);
+  assert.match(migration, /add column if not exists reveal_player_photos boolean not null default false/i);
+  assert.match(migration, /add column if not exists reveal_answer_photos boolean not null default false/i);
+  assert.doesNotMatch(migration, /\b(drop|truncate|delete|update)\b/i);
+  assert.doesNotMatch(migration, /storage\.objects/i);
+});
+
+test("public hunt page creates private signed URLs only after server-side reveal checks", () => {
+  const page = fs.readFileSync(path.join(process.cwd(), "app/hunt/page.tsx"), "utf8");
+  assert.match(page, /if \(event && canShowHuntPlayerPhotos\(event\)\)/);
+  assert.match(page, /if \(event && canShowHuntAnswerPhotos\(event\)\)/);
+  assert.match(page, /\.eq\("status", "correct"\)/);
+  assert.match(page, /storage\.from\("hunt-proofs"\)\.createSignedUrl/);
+  assert.match(page, /storage\.from\("hunt-references"\)\.createSignedUrl/);
+});
+
 test("hunt AI migration is additive and keeps all existing proofs and Cos data", () => {
   const migration = fs.readFileSync(
     path.join(process.cwd(), "supabase/migrations/20260815143000_hunt_ai_recognition.sql"),
@@ -110,6 +196,28 @@ test("hunt AI migration is additive and keeps all existing proofs and Cos data",
   assert.match(migration, /references public\.hunt_reference_points\(id\) on delete restrict/i);
   assert.match(migration, /alter table public\.hunt_reference_points enable row level security/i);
   assert.match(migration, /revoke all on table public\.hunt_reference_images from anon, authenticated/i);
+});
+
+test("hunt visual verification migration only adds nullable metadata", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815180000_hunt_visual_verification.sql"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists auto_verification jsonb/i);
+  assert.match(migration, /add column if not exists auto_verification_confidence real/i);
+  assert.match(migration, /add column if not exists auto_verification_model text/i);
+  assert.doesNotMatch(migration, /\b(drop|truncate|delete|update|insert)\b/i);
+  assert.doesNotMatch(migration, /storage\.objects/i);
+});
+
+test("admins can reprocess a hunt proof without replacing the proof or manual review", () => {
+  const route = fs.readFileSync(path.join(process.cwd(), "app/api/admin/hunt/route.ts"), "utf8");
+  const block = route.slice(route.indexOf('if (type === "hunt_submission_reprocess")'), route.indexOf('if (type === "hunt_review")'));
+  assert.match(block, /storage\.from\("hunt-proofs"\)\.download\(before\.image_path\)/);
+  assert.match(block, /recognizeHuntImage/);
+  assert.match(block, /auto_verification:/);
+  assert.doesNotMatch(block, /storage\.from\("hunt-proofs"\)\.(remove|upload)/);
+  assert.doesNotMatch(block, /\b(status|matched_target_number|image_path|file_hash):/);
 });
 
 test("ranking counts only correct finds and favors the earlier reached count", () => {
@@ -182,4 +290,44 @@ test("administrators can edit a reference point and append helper images without
   assert.match(client, /URL\.createObjectURL/);
   assert.match(client, /replaceInputFiles\(inputRef\.current, next\)/);
   assert.match(client, /準備上傳的參考圖預覽/);
+});
+
+test("hunt uploads check exact duplicates before creating Storage objects", () => {
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/hunt/submissions/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/hunt/HuntClient.tsx"),
+    "utf8",
+  );
+  assert.match(route, /export async function PUT/);
+  assert.match(route, /\.eq\("file_hash", fileHash\)/);
+  assert.match(client, /method: "PUT"/);
+  assert.ok(
+    client.indexOf('method: "PUT"') < client.indexOf('storage.from("hunt-proofs").upload'),
+    "duplicate preflight must run before uploading the proof",
+  );
+});
+
+test("hunt reference hashes are additive and cannot change existing images", () => {
+  const migration = fs.readFileSync(
+    path.join(process.cwd(), "supabase/migrations/20260815170000_hunt_reference_content_hash.sql"),
+    "utf8",
+  );
+  const route = fs.readFileSync(
+    path.join(process.cwd(), "app/api/admin/hunt/route.ts"),
+    "utf8",
+  );
+  const client = fs.readFileSync(
+    path.join(process.cwd(), "app/admin/hunt/HuntAdminClient.tsx"),
+    "utf8",
+  );
+  assert.match(migration, /add column if not exists content_sha256 text/i);
+  assert.match(migration, /unique index if not exists hunt_reference_images_point_content_sha256_uidx/i);
+  assert.doesNotMatch(migration, /\b(delete|truncate|update|drop table|drop column)\b/i);
+  assert.match(route, /\.eq\("content_sha256", fileHash\)/);
+  assert.match(route, /content_sha256: fileHash/);
+  assert.match(client, /sha256File\(file\)/);
+  assert.match(client, /fileHash/);
 });

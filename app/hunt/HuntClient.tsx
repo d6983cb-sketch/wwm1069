@@ -8,10 +8,23 @@ import {
   compressReplacementPhoto,
   replacementFileExtension,
   replacementUploadError,
+  sha256File,
   validateReplacementPhoto,
   withUploadTimeout,
 } from "@/lib/client-image-upload";
-import { calculateHuntProgress, canShowHuntRanking, isHuntOpen, type HuntEventRecord, type HuntRankingRow, type HuntSubmissionRecord } from "@/lib/hunt";
+import {
+  calculateHuntProgress,
+  canShowHuntAnswerPhotos,
+  canShowHuntPlayerPhotos,
+  canShowHuntRanking,
+  hasReachedHuntPhotoRevealTime,
+  isHuntOpen,
+  type HuntEventRecord,
+  type HuntPublicAnswerPhoto,
+  type HuntPublicPlayerPhoto,
+  type HuntRankingRow,
+  type HuntSubmissionRecord,
+} from "@/lib/hunt";
 
 type OwnSubmission = HuntSubmissionRecord & { signedUrl: string | null };
 type PendingPhotoStatus = "ready" | "processing" | "success" | "error";
@@ -32,11 +45,6 @@ const statusLabels = {
   duplicate: "重複",
 };
 
-async function sha256(file: File) {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export default function HuntClient({
   event,
   userId,
@@ -44,6 +52,8 @@ export default function HuntClient({
   disqualified,
   submissions,
   ranking,
+  publicPlayerPhotos,
+  publicAnswerPhotos,
 }: {
   event: HuntEventRecord | null;
   userId: string | null;
@@ -51,6 +61,8 @@ export default function HuntClient({
   disqualified: boolean;
   submissions: OwnSubmission[];
   ranking: HuntRankingRow[];
+  publicPlayerPhotos: HuntPublicPlayerPhoto[];
+  publicAnswerPhotos: HuntPublicAnswerPhoto[];
 }) {
   const router = useRouter();
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
@@ -69,6 +81,9 @@ export default function HuntClient({
     for (const photo of photosRef.current) URL.revokeObjectURL(photo.previewUrl);
   }, []);
   const open = isHuntOpen(event);
+  const photoRevealReached = hasReachedHuntPhotoRevealTime(event);
+  const showPlayerPhotos = canShowHuntPlayerPhotos(event);
+  const showAnswerPhotos = canShowHuntAnswerPhotos(event);
 
   const signIn = async () => {
     const supabase = createClient();
@@ -146,7 +161,16 @@ export default function HuntClient({
       setMessage(`正在依序處理 ${index + 1} / ${queuedPhotos.length} 張…`);
       try {
         const compressed = await compressReplacementPhoto(photo.file, "image/jpeg");
-        const fileHash = await sha256(compressed);
+        const fileHash = await sha256File(compressed);
+        const preflightResponse = await fetch("/api/hunt/submissions", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ fileHash }),
+        });
+        const preflightBody = await preflightResponse.json().catch(() => ({}));
+        if (!preflightResponse.ok) {
+          throw new Error(preflightBody.message || "尋物照片目前無法送出。");
+        }
         imagePath = `${userId}/${crypto.randomUUID()}-proof.${replacementFileExtension(compressed)}`;
         const supabase = createClient();
         const { error: uploadError } = await withUploadTimeout(
@@ -287,7 +311,7 @@ export default function HuntClient({
             {submission.signedUrl ? <Image src={submission.signedUrl} width={320} height={240} alt={`尋物照片 ${submission.id}`} unoptimized /> : <span className="muted">照片暫時無法載入</span>}
             <b className={`hunt-status ${submission.status}`}>{statusLabels[submission.status]}</b>
             {submission.matched_target_number && <span>藏物 H{String(submission.matched_target_number).padStart(3, "0")}</span>}
-            {submission.status === "pending" && submission.auto_status === "matched" && submission.auto_match_target_number && <span className="hunt-auto-player">暫定 H{String(submission.auto_match_target_number).padStart(3, "0")} · 相似度 {Math.round((submission.auto_similarity ?? 0) * 100)}%<small>等待人工確認</small></span>}
+            {submission.status === "pending" && submission.auto_status === "matched" && submission.auto_match_target_number && <span className="hunt-auto-player">暫定 H{String(submission.auto_match_target_number).padStart(3, "0")} · 視覺信心 {Math.round((submission.auto_verification_confidence ?? 0) * 100)}%<small>等待人工確認</small></span>}
             {submission.status === "pending" && submission.auto_status === "duplicate" && <span className="hunt-auto-player warning">疑似重複點位，暫不重複計數<small>等待人工確認</small></span>}
             {submission.status === "pending" && submission.auto_status === "uncertain" && <span className="hunt-auto-player warning">自動辨識不確定<small>已轉人工審核</small></span>}
             {submission.status === "pending" && submission.auto_status === "error" && <span className="hunt-auto-player warning">自動辨識未完成<small>已轉人工審核，照片不需重傳</small></span>}
@@ -301,6 +325,35 @@ export default function HuntClient({
             >{deletingId === submission.id ? "刪除中…" : "刪除這筆錯誤投稿"}</button>}
           </article>)}
         </div> : <p className="muted">尚未上傳照片。</p>}
+      </section>}
+
+      {(event.reveal_player_photos || event.reveal_answer_photos) && <section className="hunt-public-photos">
+        <header>
+          <div><h2>活動照片公開區</h2><p>只有管理員人工確認正確的玩家照片與啟用中的答案照片會在這裡顯示。</p></div>
+          {event.photo_reveal_at && <time>{photoRevealReached ? "已公開" : `預計 ${new Date(event.photo_reveal_at).toLocaleString("zh-TW")} 公開`}</time>}
+        </header>
+        {!photoRevealReached ? (
+          <div className="hunt-photo-locked"><i>鎖</i><b>公開時間尚未到達</b><span>其他玩家的投稿照片與答案圖仍保持隱藏。</span></div>
+        ) : <>
+          {event.reveal_player_photos && <div className="hunt-public-photo-group">
+            <h3>玩家找到的正確照片</h3>
+            {showPlayerPhotos && publicPlayerPhotos.length ? <div className="hunt-public-photo-grid">
+              {publicPlayerPhotos.map((photo) => <figure key={`player-${photo.id}`}>
+                <Image src={photo.signedUrl} width={360} height={270} alt={`${photo.nickname} 找到的 H${String(photo.targetNumber).padStart(3, "0")}`} unoptimized />
+                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.nickname}</span></figcaption>
+              </figure>)}
+            </div> : <p className="muted">目前沒有可公開的正確照片。</p>}
+          </div>}
+          {event.reveal_answer_photos && <div className="hunt-public-photo-group">
+            <h3>答案與點位參考照片</h3>
+            {showAnswerPhotos && publicAnswerPhotos.length ? <div className="hunt-public-photo-grid">
+              {publicAnswerPhotos.map((photo) => <figure key={`answer-${photo.id}`}>
+                <Image src={photo.signedUrl} width={360} height={270} alt={`H${String(photo.targetNumber).padStart(3, "0")} 答案照片`} unoptimized />
+                <figcaption><b>H{String(photo.targetNumber).padStart(3, "0")}</b><span>{photo.label || "未命名點位"}</span></figcaption>
+              </figure>)}
+            </div> : <p className="muted">目前沒有啟用中的答案照片。</p>}
+          </div>}
+        </>}
       </section>}
 
       <section className="hunt-ranking">

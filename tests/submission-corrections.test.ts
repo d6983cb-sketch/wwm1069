@@ -142,3 +142,20 @@ test("correction migration is append-only for canonical contest data", () => {
   assert.match(migration, /grant execute .* to service_role/);
   assert.match(migration, /revoke all .* from authenticated/);
 });
+
+test("Cos submission eligibility is checked before any image upload", () => {
+  const route = readFileSync(
+    new URL("../app/api/submissions/route.ts", import.meta.url),
+    "utf8",
+  );
+  const client = readFileSync(
+    new URL("../app/submit/SubmitForm.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /export async function PUT/);
+  assert.match(route, /你已經投稿過，不需要再次上傳照片/);
+  assert.ok(
+    client.indexOf('method: "PUT"') < client.indexOf('storage.from("cos-originals").upload'),
+    "submission preflight must run before uploading files",
+  );
+});

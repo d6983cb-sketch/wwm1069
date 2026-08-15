@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { calculateHuntProgress, isHuntOpen, type HuntAutoStatus, type HuntEventRecord, type HuntSubmissionRecord } from "@/lib/hunt";
-import { HUNT_EMBEDDING_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
+import { HUNT_AI_PIPELINE_MODEL, HUNT_VERIFICATION_MODEL, isHuntAiConfigured, recognizeHuntImage } from "@/lib/hunt-ai";
 
 export const maxDuration = 60;
 
@@ -16,6 +16,46 @@ const validPath = (userId: string, value: unknown) => {
 async function removeProof(path: string | null) {
   if (!path) return;
   await createAdminClient().storage.from("hunt-proofs").remove([path]);
+}
+
+export async function PUT(request: Request) {
+  const supabase = await createClient();
+  const admin = createAdminClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "unauthorized", message: "請先登入。" }, { status: 401 });
+
+  const body = await request.json().catch(() => ({}));
+  const fileHash = String(body.fileHash ?? "").toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(fileHash)) {
+    return NextResponse.json({ error: "invalid_submission", message: "照片資料不正確，請重新選擇。" }, { status: 400 });
+  }
+
+  const [{ data: eventData }, { data: profile }] = await Promise.all([
+    admin.from("hunt_events").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    admin.from("profiles").select("id,is_disqualified").eq("id", user.id).maybeSingle(),
+  ]);
+  const event = eventData as HuntEventRecord | null;
+  if (!profile || profile.is_disqualified) {
+    return NextResponse.json({ error: "ineligible", message: "目前沒有參加資格。" }, { status: 403 });
+  }
+  if (!event || !isHuntOpen(event)) {
+    return NextResponse.json({ error: "hunt_closed", message: "目前未開放上傳尋物照片。" }, { status: 422 });
+  }
+
+  const { data: duplicate, error } = await admin
+    .from("hunt_submissions")
+    .select("id")
+    .eq("hunt_event_id", event.id)
+    .eq("profile_id", user.id)
+    .eq("file_hash", fileHash)
+    .maybeSingle();
+  if (error) {
+    return NextResponse.json({ error: "duplicate_check_failed", message: "暫時無法檢查重複照片，請稍後再試。" }, { status: 500 });
+  }
+  if (duplicate) {
+    return NextResponse.json({ error: "duplicate_file", message: "這張照片已經上傳過，不需要重複送出。" }, { status: 409 });
+  }
+  return NextResponse.json({ ok: true });
 }
 
 export async function POST(request: Request) {
@@ -82,7 +122,7 @@ export async function POST(request: Request) {
       await admin.from("hunt_submissions").update({
         auto_status: "error",
         auto_checked_at: new Date().toISOString(),
-        auto_model: HUNT_EMBEDDING_MODEL,
+        auto_model: HUNT_AI_PIPELINE_MODEL,
       }).eq("id", created.id);
       autoMessage = "照片已送出；自動辨識暫時未設定，將由管理員人工審核。";
     } else {
@@ -111,7 +151,10 @@ export async function POST(request: Request) {
           auto_similarity: decision.similarity,
           auto_candidates: decision.candidates,
           auto_checked_at: new Date().toISOString(),
-          auto_model: HUNT_EMBEDDING_MODEL,
+          auto_model: HUNT_AI_PIPELINE_MODEL,
+          auto_verification: decision.verification,
+          auto_verification_confidence: decision.verification?.confidence ?? null,
+          auto_verification_model: decision.verification ? HUNT_VERIFICATION_MODEL : null,
         }).eq("id", created.id);
         if (autoStatus === "matched" && decision.targetNumber) {
           autoMessage = `自動辨識暫定為 H${String(decision.targetNumber).padStart(3, "0")}，已立即計入暫定數量，仍需人工確認。`;
@@ -124,7 +167,7 @@ export async function POST(request: Request) {
         await admin.from("hunt_submissions").update({
           auto_status: "error",
           auto_checked_at: new Date().toISOString(),
-          auto_model: HUNT_EMBEDDING_MODEL,
+          auto_model: HUNT_AI_PIPELINE_MODEL,
         }).eq("id", created.id);
         autoMessage = "照片已送出；自動辨識暫時無法完成，將由管理員人工審核。";
       }

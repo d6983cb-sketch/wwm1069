@@ -8,6 +8,14 @@ export type HuntAutoCandidate = {
   similarity: number;
 };
 
+export type HuntAutoVerification = {
+  matchedTargetNumber: number;
+  objectVisible: boolean;
+  samePhysicalLocation: boolean;
+  confidence: number;
+  reason: string;
+};
+
 export type HuntEventRecord = {
   id: string;
   title: string;
@@ -22,6 +30,9 @@ export type HuntEventRecord = {
   auto_match_enabled: boolean;
   auto_match_threshold: number;
   auto_match_margin: number;
+  photo_reveal_at: string | null;
+  reveal_player_photos: boolean;
+  reveal_answer_photos: boolean;
 };
 
 export type HuntSubmissionRecord = {
@@ -43,6 +54,9 @@ export type HuntSubmissionRecord = {
   auto_candidates: HuntAutoCandidate[];
   auto_checked_at: string | null;
   auto_model: string | null;
+  auto_verification: HuntAutoVerification | null;
+  auto_verification_confidence: number | null;
+  auto_verification_model: string | null;
 };
 
 export type HuntReferencePoint = {
@@ -74,6 +88,21 @@ export type HuntRankingRow = {
   rank: number;
 };
 
+export type HuntPublicPlayerPhoto = {
+  id: number;
+  targetNumber: number;
+  nickname: string;
+  submittedAt: string;
+  signedUrl: string;
+};
+
+export type HuntPublicAnswerPhoto = {
+  id: string;
+  targetNumber: number;
+  label: string | null;
+  signedUrl: string;
+};
+
 export function isHuntOpen(event: HuntEventRecord | null, now = Date.now()) {
   if (!event || event.status !== "open") return false;
   return now >= Date.parse(event.starts_at) && now <= Date.parse(event.ends_at);
@@ -83,6 +112,20 @@ export function canShowHuntRanking(event: HuntEventRecord | null) {
   if (!event) return false;
   if (event.status === "results_published" || event.status === "archived") return true;
   return event.leaderboard_mode === "live" && event.status === "open";
+}
+
+export function hasReachedHuntPhotoRevealTime(event: HuntEventRecord | null, now = Date.now()) {
+  if (!event?.photo_reveal_at) return false;
+  const revealAt = Date.parse(event.photo_reveal_at);
+  return Number.isFinite(revealAt) && now >= revealAt;
+}
+
+export function canShowHuntPlayerPhotos(event: HuntEventRecord | null, now = Date.now()) {
+  return event?.reveal_player_photos === true && hasReachedHuntPhotoRevealTime(event, now);
+}
+
+export function canShowHuntAnswerPhotos(event: HuntEventRecord | null, now = Date.now()) {
+  return event?.reveal_answer_photos === true && hasReachedHuntPhotoRevealTime(event, now);
 }
 
 export function calculateHuntRanking(

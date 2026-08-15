@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { taipeiInputToIso, toTaipeiInput } from "@/lib/taipei-datetime";
 import { createClient } from "@/lib/supabase/browser";
-import { compressReplacementPhoto, validateReplacementPhoto, withUploadTimeout } from "@/lib/client-image-upload";
+import { compressReplacementPhoto, sha256File, validateReplacementPhoto, withUploadTimeout } from "@/lib/client-image-upload";
 import type { HuntEventRecord, HuntRankingRow, HuntReferencePoint, HuntSubmissionRecord } from "@/lib/hunt";
 
 type ReviewRow = HuntSubmissionRecord & {
@@ -132,6 +132,16 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
     formEvent.preventDefault();
     const form = new FormData(formEvent.currentTarget);
     const nextStatus = String(form.get("status"));
+    const photoRevealAtValue = String(form.get("photoRevealAt") ?? "").trim();
+    const revealPlayerPhotos = form.get("revealPlayerPhotos") === "on";
+    const revealAnswerPhotos = form.get("revealAnswerPhotos") === "on";
+    if ((revealPlayerPhotos || revealAnswerPhotos) && !photoRevealAtValue) {
+      setMessage("開啟照片公開功能時，必須設定公開時間。");
+      return;
+    }
+    if ((revealPlayerPhotos || revealAnswerPhotos) && Date.parse(taipeiInputToIso(photoRevealAtValue)) <= Date.now()) {
+      if (!confirm("照片公開時間已經到達；儲存後，已勾選的玩家照片或答案照片會立即對所有訪客公開。確定儲存？")) return;
+    }
     if (["closed", "results_published", "archived"].includes(nextStatus)) {
       if (!confirm(`確定將尋物活動切換為「${nextStatus}」？這會立即影響玩家上傳及排行榜。`)) return;
     }
@@ -149,6 +159,9 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
       autoMatchEnabled: form.get("autoMatchEnabled") === "on",
       autoMatchThreshold: Number(form.get("autoMatchThreshold")),
       autoMatchMargin: Number(form.get("autoMatchMargin")),
+      photoRevealAt: photoRevealAtValue ? taipeiInputToIso(photoRevealAtValue) : null,
+      revealPlayerPhotos,
+      revealAnswerPhotos,
     });
   };
 
@@ -171,10 +184,11 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
         const validation = validateReplacementPhoto(source);
         if (validation) throw new Error(validation);
         const file = await compressReplacementPhoto(source, "image/jpeg");
+        const fileHash = await sha256File(file);
         const signResponse = await fetch("/api/admin/hunt", {
           method: "POST",
           headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
-          body: JSON.stringify({ type: "hunt_reference_upload_url", eventId: event.id, targetNumber, mimeType: file.type }),
+          body: JSON.stringify({ type: "hunt_reference_upload_url", eventId: event.id, targetNumber, mimeType: file.type, fileHash }),
         });
         const signBody = await signResponse.json().catch(() => ({}));
         if (!signResponse.ok) throw new Error(signBody.message || "無法取得上傳權限。");
@@ -186,7 +200,7 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
         const createResponse = await fetch("/api/admin/hunt", {
           method: "POST",
           headers: { "content-type": "application/json", "x-request-id": crypto.randomUUID() },
-          body: JSON.stringify({ type: "hunt_reference_create", eventId: event.id, targetNumber, label, imagePath: signBody.path, mimeType: file.type }),
+          body: JSON.stringify({ type: "hunt_reference_create", eventId: event.id, targetNumber, label, imagePath: signBody.path, mimeType: file.type, fileHash }),
         });
         const createBody = await createResponse.json().catch(() => ({}));
         if (!createResponse.ok) throw new Error(createBody.message || "辨識索引建立失敗。");
@@ -245,6 +259,12 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
           <option value="hidden">活動期間隱藏</option><option value="live">即時公開</option><option value="final">結果公布後顯示</option>
         </select></label>
         <label className="setting-check"><input name="showTargetImage" type="checkbox" defaultChecked={event?.show_target_image === true} /><span><b>向玩家顯示目標物參考圖片</b><small>關閉時只顯示活動文字，不顯示圖一。</small></span></label>
+        <fieldset className="hunt-reveal-settings">
+          <legend>照片定時公開</legend>
+          <label>公開時間（台北時間）<input name="photoRevealAt" type="datetime-local" defaultValue={event?.photo_reveal_at ? toTaipeiInput(event.photo_reveal_at) : ""} /><small>時間未到以前，伺服器不會提供他人投稿或答案照片的觀看網址。</small></label>
+          <label className="setting-check"><input name="revealPlayerPhotos" type="checkbox" defaultChecked={event?.reveal_player_photos === true} /><span><b>公開玩家正確照片</b><small>只公開已由管理員確認為正確的照片，不公開待審、錯誤或重複照片。</small></span></label>
+          <label className="setting-check"><input name="revealAnswerPhotos" type="checkbox" defaultChecked={event?.reveal_answer_photos === true} /><span><b>公開答案／點位參考照片</b><small>公開啟用中的點位名稱與輔助辨識參考圖。</small></span></label>
+        </fieldset>
         <label className="setting-check"><input name="autoMatchEnabled" type="checkbox" defaultChecked={event?.auto_match_enabled === true} disabled={!aiConfigured} /><span><b>開啟上傳後自動辨識</b><small>{aiConfigured ? "立即顯示暫定點位與數量，人工審核後才成為正式結果。" : "尚未設定 Gemini API Key，因此目前不能開啟。"}</small></span></label>
         <label>辨識相似度門檻<input name="autoMatchThreshold" type="number" min={0.5} max={0.99} step={0.01} defaultValue={event?.auto_match_threshold ?? 0.78} /><small>建議先使用 0.78；數值越高越嚴格。</small></label>
         <label>第一、第二候選最小差距<input name="autoMatchMargin" type="number" min={0} max={0.3} step={0.01} defaultValue={event?.auto_match_margin ?? 0.04} /><small>差距不足時自動轉人工審核，建議 0.04。</small></label>
@@ -303,7 +323,13 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
           <p>{submission.player_note || "玩家未填寫說明"}</p>
           <time>{new Date(submission.submitted_at).toLocaleString("zh-TW")}</time>
           <b className={`hunt-status ${submission.status}`}>{statusLabels[submission.status]}</b>
-          <div className={`hunt-auto-result ${submission.auto_status}`}><b>自動辨識：</b>{submission.auto_status === "matched" ? `暫定 H${String(submission.auto_match_target_number).padStart(3, "0")}` : submission.auto_status === "duplicate" ? "疑似重複點位" : submission.auto_status === "uncertain" ? "不確定，需人工判定" : submission.auto_status === "error" ? "辨識未完成" : "尚未執行"}{submission.auto_similarity != null && <small>相似度 {Math.round(submission.auto_similarity * 100)}%</small>}</div>
+          <div className={`hunt-auto-result ${submission.auto_status}`}>
+            <b>自動辨識：</b>{submission.auto_status === "matched" ? `暫定 H${String(submission.auto_match_target_number).padStart(3, "0")}` : submission.auto_status === "duplicate" ? "疑似重複點位" : submission.auto_status === "uncertain" ? "不確定，需人工判定" : submission.auto_status === "error" ? "辨識未完成" : "尚未執行"}
+            {submission.auto_similarity != null && <small>向量候選 {Math.round(submission.auto_similarity * 100)}%</small>}
+            {submission.auto_verification_confidence != null && <small>視覺核對 {Math.round(submission.auto_verification_confidence * 100)}%</small>}
+            {submission.auto_verification?.reason && <small>{submission.auto_verification.reason}</small>}
+            <button type="button" disabled={busy || !aiConfigured} onClick={() => action({ type: "hunt_submission_reprocess", submissionId: submission.id })}>以二階段視覺重新辨識</button>
+          </div>
           {submission.disqualified && <strong className="form-error">此玩家已取消資格</strong>}
           <form onSubmit={(formEvent) => review(formEvent, submission.id)}>
             <label>判定<select name="status" defaultValue={submission.status === "pending" ? "correct" : submission.status}>

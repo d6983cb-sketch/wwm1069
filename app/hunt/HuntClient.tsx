@@ -66,6 +66,11 @@ export default function HuntClient({
   const submit = async (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     if (!file || !userId || !event) return;
+    // React's currentTarget is only guaranteed while the event handler is
+    // running synchronously. Read the form before image compression/upload;
+    // otherwise currentTarget can be null by the time the awaited work ends.
+    const form = new FormData(formEvent.currentTarget);
+    const playerNote = String(form.get("playerNote") ?? "");
     const validation = validateReplacementPhoto(file);
     if (validation) return setMessage(validation);
     setBusy(true);
@@ -81,11 +86,10 @@ export default function HuntClient({
         "upload_timeout",
       );
       if (uploadError) throw uploadError;
-      const form = new FormData(formEvent.currentTarget);
       const response = await fetch("/api/hunt/submissions", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ imagePath, fileHash, playerNote: form.get("playerNote") }),
+        body: JSON.stringify({ imagePath, fileHash, playerNote }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message || body.error || "submission_failed");
@@ -94,7 +98,16 @@ export default function HuntClient({
       setMessage(body.message ?? "照片已送出，等待審核。");
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error && /[\u4e00-\u9fff]/.test(error.message) ? error.message : replacementUploadError(error));
+      console.error("[hunt-upload] submission failed", {
+        stage: imagePath ? "create-record" : "upload-proof",
+        error,
+      });
+      const fallback = replacementUploadError(error);
+      setMessage(error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)
+        ? error.message
+        : fallback === "照片修正失敗，原作品仍保持不變。"
+          ? "尋物照片上傳失敗，請重新整理後再試一次。"
+          : fallback);
     } finally {
       setBusy(false);
     }

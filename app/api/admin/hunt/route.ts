@@ -335,8 +335,12 @@ export async function POST(request: Request) {
             ? "已通過視覺核對，但玩家已有同一點位，暫列重複。"
             : "視覺證據不足，已改列不確定並保留人工審核。",
       });
-    } catch {
-      return json("submission_reprocess_failed", "重新辨識失敗，原辨識結果與照片完全未變更。", 500);
+    } catch (error) {
+      const failureCode = error instanceof Error
+        ? error.message.replace(/[^a-zA-Z0-9_:-]/g, "").slice(0, 160)
+        : "unknown";
+      console.error("hunt_submission_reprocess_failed", { submissionId, failureCode });
+      return json("submission_reprocess_failed", `重新辨識失敗（${failureCode || "unknown"}），原辨識結果與照片完全未變更。`, 500);
     }
   }
 

@@ -38,6 +38,18 @@ type PendingPhoto = {
 
 const MAX_BATCH_PHOTOS = 22;
 
+function formatTaipeiDateTime(value: string) {
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
 const statusLabels = {
   pending: "等待審核",
   correct: "正確",
@@ -316,7 +328,7 @@ export default function HuntClient({
             {submission.status === "pending" && submission.auto_status === "uncertain" && <span className="hunt-auto-player warning">自動辨識不確定<small>已轉人工審核</small></span>}
             {submission.status === "pending" && submission.auto_status === "error" && <span className="hunt-auto-player warning">自動辨識未完成<small>已轉人工審核，照片不需重傳</small></span>}
             {submission.review_note && <small>{submission.review_note}</small>}
-            <time>{new Date(submission.submitted_at).toLocaleString("zh-TW")}</time>
+            <time>{formatTaipeiDateTime(submission.submitted_at)}</time>
             {open && submission.status !== "correct" && <button
               type="button"
               className="hunt-delete"
@@ -330,7 +342,7 @@ export default function HuntClient({
       {(event.reveal_player_photos || event.reveal_answer_photos) && <section className="hunt-public-photos">
         <header>
           <div><h2>活動照片公開區</h2><p>只有管理員人工確認正確的玩家照片與啟用中的答案照片會在這裡顯示。</p></div>
-          {event.photo_reveal_at && <time>{photoRevealReached ? "已公開" : `預計 ${new Date(event.photo_reveal_at).toLocaleString("zh-TW")} 公開`}</time>}
+          {event.photo_reveal_at && <time>{photoRevealReached ? "已公開" : `預計 ${formatTaipeiDateTime(event.photo_reveal_at)} 公開`}</time>}
         </header>
         {!photoRevealReached ? (
           <div className="hunt-photo-locked"><i>鎖</i><b>公開時間尚未到達</b><span>其他玩家的投稿照片與答案圖仍保持隱藏。</span></div>

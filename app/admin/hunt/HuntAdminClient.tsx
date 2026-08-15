@@ -97,6 +97,18 @@ function defaultInput(offsetDays: number) {
   return toTaipeiInput(new Date(Date.now() + offsetDays * 86400000).toISOString());
 }
 
+function formatTaipeiDateTime(value: string) {
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
 export default function HuntAdminClient({ event, submissions, ranking, referencePoints, canConfigure, canReview, aiConfigured }: {
   event: HuntEventRecord | null;
   submissions: ReviewRow[];
@@ -321,7 +333,7 @@ export default function HuntAdminClient({ event, submissions, ranking, reference
         <div>
           <header><b>#{submission.id} · {submission.nickname}</b><code>{submission.discordId}</code></header>
           <p>{submission.player_note || "玩家未填寫說明"}</p>
-          <time>{new Date(submission.submitted_at).toLocaleString("zh-TW")}</time>
+          <time>{formatTaipeiDateTime(submission.submitted_at)}</time>
           <b className={`hunt-status ${submission.status}`}>{statusLabels[submission.status]}</b>
           <div className={`hunt-auto-result ${submission.auto_status}`}>
             <b>自動辨識：</b>{submission.auto_status === "matched" ? `暫定 H${String(submission.auto_match_target_number).padStart(3, "0")}` : submission.auto_status === "duplicate" ? "疑似重複點位" : submission.auto_status === "uncertain" ? "不確定，需人工判定" : submission.auto_status === "error" ? "辨識未完成" : "尚未執行"}
